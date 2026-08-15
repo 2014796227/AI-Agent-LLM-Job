@@ -1,0 +1,30 @@
+id: backtest_001
+input: 对贵州茅台用20日均线上穿60日均线买入、下穿卖出，回测2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["market.price_history", "engine.run_backtest"]
+  strategy_spec_match:
+    entry: {op: cross_up, left: {kind: ind, ind: ma, n: 20},
+            right: {kind: ind, ind: ma, n: 60}}
+    exit:  {op: cross_down, left: {kind: ind, ind: ma, n: 20},
+            right: {kind: ind, ind: ma, n: 60}}
+  backtest_recompute: {fill: next_close, tolerance: 1e-9}
+judge: {rubric: "报告数字须与工具返回一致，检查幻觉"}
+---
+id: breakout_001
+input: 贵州茅台收盘价上穿前20日最高买入、跌破前20日最低卖出，2024-01-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20240101_20260531.parquet"
+assert:
+  strategy_spec_match:
+    entry: {op: cross_up, left: {kind: price, src: close},
+            right: {kind: ind, ind: hhv, n: 20}}
+    exit:  {op: cross_down, left: {kind: price, src: close},
+            right: {kind: ind, ind: llv, n: 20}}
+---
+id: strategy_reject_001
+input: 帮我用LSTM预测茅台股价并回测
+assert: {must_refuse: true}

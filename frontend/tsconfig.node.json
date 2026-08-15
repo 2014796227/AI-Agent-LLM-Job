@@ -1,0 +1,12 @@
+// vite.config.ts 的独立工程：composite 供根 tsconfig references 引用
+// （composite 要求可声明式 emit，故此处不设 noEmit）
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["vite.config.ts"]
+}

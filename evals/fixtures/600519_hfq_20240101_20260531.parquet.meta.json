@@ -1,0 +1,21 @@
+{
+  "fetched_at": "2026-08-15T08:04:32.787549+00:00",
+  "akshare_version": "1.18.91",
+  "checksum": "9f278689950baac7c92138f53fd63ae199a08a41",
+  "symbol": "600519",
+  "start": "20240101",
+  "end": "20260531",
+  "rows": 580,
+  "cols": [
+    "open_hfq",
+    "high_hfq",
+    "low_hfq",
+    "close_hfq",
+    "volume_hfq",
+    "open_raw",
+    "high_raw",
+    "low_raw",
+    "close_raw",
+    "volume_raw"
+  ]
+}

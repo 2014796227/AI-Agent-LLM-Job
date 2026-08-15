@@ -1,0 +1,47 @@
+name: alphadesk   # 固定项目名→卷名恒为 alphadesk_*（backup.sh 与恢复手册引用；默认=目录名 deploy 会错配）
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: alphadesk
+      POSTGRES_USER: alphadesk
+      POSTGRES_PASSWORD: ${DB_PASS}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alphadesk"]
+      interval: 5s
+      retries: 12
+    restart: always   # v17：与 api 一致——db 崩溃自愈，否则 api/web 空转
+  api:
+    build: ../backend
+    env_file: ../backend/.env
+    environment:
+      DATABASE_URL: postgresql://alphadesk:${DB_PASS}@db:5432/alphadesk
+    volumes:
+      - appdata:/app/.data
+      - marketcache:/app/.cache
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+  web:
+    image: nginx:alpine
+    volumes:
+      - ../frontend/dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: always   # v17：与 api/db 一致
+
+# v19（M0-D1 实测发现）：volumes 顶键误缩进于 services: 之下→
+# compose 校验失败 "services.volumes additional properties not allowed"；
+# 移回顶层（蓝图 v18 缩进笔误，修复同步回蓝图）
+volumes:
+  pgdata: {}
+  appdata: {}
+  marketcache: {}

@@ -1,0 +1,26 @@
+// v18 钉死（此前 FILE-MANIFEST 标"新增"但内容未入蓝图）。关键项与代码约束
+// 互锁：verbatimModuleSyntax=true → 必须 import type（Timeline/useTaskStream
+// 已按此写）；lib=ES2020 → 无 .at(-1)（ChatBox 已按此写）；noUnusedLocals
+// → main.tsx 不得导入未使用的 React。tsc -b 经 references 先构建 node 工程。
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
