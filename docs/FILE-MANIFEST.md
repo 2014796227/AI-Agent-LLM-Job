@@ -128,6 +128,14 @@
 | `scripts/m0_drill_vector.py` | 向量检索 drill：bge-m3 真实嵌入入库→近邻命中→HNSW 验证（api 容器内） |
 | `migrations/002_hnsw.sql` | 见上表（从"待定"转为已启用） |
 
+**M2 部署轮新增（2026-08-15，线上 http://43.156.248.38）**
+
+| 文件 | 用途 |
+|---|---|
+| `scripts/deploy_ssh.py` | 部署用 SSH 执行器（paramiko；密码走环境变量不落盘；put 带重试——该服务器新连接首次 SFTP open 偶发被拒，单连接多操作即过） |
+| `scripts/m0_e2e_task.py`（增强） | BASE_URL/TIMEOUT_S 环境变量化（线上验收复用同一脚本） |
+| `docs/acceptance/M2-验收报告.md` | M2 上线验收留痕 |
+
 ## 七、审查建议顺序
 
 1. `docs/FILE-MANIFEST.md`（本文件）→ 2. `README.md` → 3. `docs/PRD.md`（含待拍板项）→ 4. `docs/provenance.md` → 5. ADR 0001~0008 → 6. 后端按 db/schema → llm → budget → events → agents → agent_loop → tasks → orchestrator → market → artifacts → dsl → backtest → tools → rag → ratelimit → main → 7. agents/*.yaml → 8. tests/ → 9. 部署四件套 + scripts → 10. 前端 → 11. `docs/verification/M0-记录.md`（已含真实环境数据）+ `docs/acceptance/M0-验收清单.md`

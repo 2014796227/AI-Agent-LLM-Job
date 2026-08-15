@@ -1,12 +1,12 @@
 """M0 端到端真实任务演练：POST /api/chat → SSE（经 nginx，兼证反代不缓冲）→
 终态 → 报告与事件摘要。
 用法: cd backend && ./.venv/Scripts/python.exe ../scripts/m0_e2e_task.py [自定义输入]"""
-import asyncio, json, sys, time
+import asyncio, json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-BASE = "http://127.0.0.1"       # 经 nginx:80（同时验证 SSE 反代，预判故障#3）
-TIMEOUT_S = 360
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1")   # 默认本机 nginx；线上用 BASE_URL=http://<ip>
+TIMEOUT_S = int(os.environ.get("TIMEOUT_S", "360"))
 
 DEFAULT_INPUT = ("分析贵州茅台(600519)近三年走势与波动特征，"
                  "并回测20日均线上穿60日均线买入、下穿卖出策略，"

@@ -11,9 +11,66 @@ class Tool:
     parameters: dict
     fn: callable                 # async (args: dict, ctx: dict) -> dict
 
-def _sch(props, required):
-    return {"type": "object", "properties": props,
-            "required": required, "additionalProperties": False}
+def _sch(props, required, defs=None):
+    out = {"type": "object", "properties": props,
+           "required": required, "additionalProperties": False}
+    if defs:
+        out["$defs"] = defs
+    return out
+
+# v23（M2 线上实测发现）：strategy_spec 原为无结构 {"type":"object"}——flash
+# 4 次翻译全错（conditions 包裹层/args 代 left-right/kind 误写指标名）。
+# 补全精确 JSON Schema（与 dsl.py 校验一一对应；嵌套≤3 用展开式 anyOf 表达，
+# 规避部分网关对 $ref 的支持差异）。
+def _operand_schema():
+    return {"oneOf": [
+        {"type": "object", "required": ["kind", "ind", "n"],
+         "additionalProperties": False,
+         "properties": {"kind": {"const": "ind"},
+                        "ind": {"enum": ["ma", "ema", "rsi", "hhv",
+                                         "llv", "ret", "vol_ma"]},
+                        "n": {"type": "integer", "minimum": 2,
+                              "maximum": 500}}},
+        {"type": "object", "required": ["kind", "src"],
+         "additionalProperties": False,
+         "properties": {"kind": {"const": "price"},
+                        "src": {"enum": ["close", "open", "high",
+                                         "low", "volume"]}}},
+        {"type": "object", "required": ["kind", "value"],
+         "additionalProperties": False,
+         "properties": {"kind": {"const": "const"},
+                        "value": {"type": "number"}}}]}
+
+def _leaf_schema():
+    return {"type": "object", "required": ["op", "left", "right"],
+            "additionalProperties": False,
+            "properties": {"op": {"enum": ["gt", "lt", "cross_up",
+                                           "cross_down"]},
+                           "left": _operand_schema(),
+                           "right": _operand_schema()}}
+
+def _cond_schema(depth: int = 2):
+    """depth=2 → Leaf | Bool(Leaf|Bool(Leaf,Leaf))，即嵌套≤3。"""
+    if depth == 0:
+        return _leaf_schema()
+    sub = _cond_schema(depth - 1)
+    return {"anyOf": [
+        _leaf_schema(),
+        {"type": "object", "required": ["op", "left", "right"],
+         "additionalProperties": False,
+         "properties": {"op": {"enum": ["and", "or"]},
+                        "left": sub, "right": sub}}]}
+
+def _strategy_spec_schema():
+    return {"type": "object",
+            "required": ["universe", "entry", "exit"],
+            "additionalProperties": False,
+            "properties": {
+                "universe": {"type": "array", "items": {"type": "string"},
+                             "minItems": 1, "maxItems": 1},
+                "entry": _cond_schema(),
+                "exit": _cond_schema(),
+                "position": {"const": "long_only"}}}
 
 _FIXTURE_COLS = {f"{col}_{k}"
                  for k in ("hfq", "raw")
@@ -90,8 +147,7 @@ REGISTRY: dict[str, Tool] = {
         "engine.run_backtest",
         "对已有行情工件执行白名单策略回测",
         _sch({"price_artifact_id": {"type": "string"},
-              "strategy_spec": {"type": "object",
-                                "description": "策略DSL: universe/entry/exit/position"}},
+              "strategy_spec": _strategy_spec_schema()},
              ["price_artifact_id", "strategy_spec"]),
         _run_backtest),
     "artifact.summary": Tool(
