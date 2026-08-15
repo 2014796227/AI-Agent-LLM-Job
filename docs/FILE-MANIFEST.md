@@ -134,6 +134,7 @@
 |---|---|
 | `scripts/deploy_ssh.py` | 部署用 SSH 执行器（paramiko；密码走环境变量不落盘；put 带重试——该服务器新连接首次 SFTP open 偶发被拒，单连接多操作即过） |
 | `scripts/m0_e2e_task.py`（增强） | BASE_URL/TIMEOUT_S 环境变量化（线上验收复用同一脚本） |
+| `scripts/m0_seed_cache.py` | 线上行情缓存预灌（东财海外 IP 限流兜底，diskcache API 从 fixture 灌入） |
 | `docs/acceptance/M2-验收报告.md` | M2 上线验收留痕 |
 
 ## 七、审查建议顺序
