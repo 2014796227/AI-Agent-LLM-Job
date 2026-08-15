@@ -322,10 +322,24 @@ async def _execute(task_id: str, input_text: str, budget: TaskBudget,
               + f"\n\n上游结论黑板：\n{_digest({k: v for k, v in context.items() if not k.startswith('_')})}"}],
             model=writer.model)
         budget.spend_llm(rw.usage_tokens)
-        draft = rw.text
+        # v24（线上实测发现）：修订输出为空（免费层偶发空 content）时保留原稿
+        # ——绝不因一轮空修订把报告回退为空
+        if rw.text.strip():
+            draft = rw.text
+        else:
+            log.warning("writer_revise_empty_kept",
+                        task_id=task_id, round=round_)
         await _emit_safe(task_id, "agent_end",
                          {"agent": "writer", "node": plan.final,
                           "note": f"revise_round_{round_}"})
+    # v24：writer 全程空输出（数据缺失+critic 连续 revise 压力下实测发生）→
+    # 不得静默"done+空报告"：以各节点结论黑板拼一份明示降级的报告
+    # （事实仍全部出自工具返回/上游节点输出，不引入新数字）
+    if not draft.strip():
+        draft = ("（撰写者未产出有效报告，以下为各节点结论摘要——本任务降级）\n\n"
+                 + _digest({k: v for k, v in context.items()
+                            if not k.startswith("_")}))
+        log.warning("writer_empty_report_fallback", task_id=task_id)
     context[plan.final]["output"] = draft
     context["_report"] = draft
 

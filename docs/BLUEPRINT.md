@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v23 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v24 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v24（2026-08-15）：**空报告防御 + 时间线可读性（用户线上反馈）**。用户线上任务（done）report 为空——根因：东财 IP 封禁持续（该窗口不在缓存）→ research 无数据 → writer 在 critic 连续 2 轮 revise 压力下最终输出**空 content**，代码无防御→`_report=""` 静默入库。**修复**：①`_execute` 修订输出为空时保留原稿（`if rw.text.strip()`）；②循环后 writer 全程空输出时以各节点结论黑板拼一份**明示降级**的报告（事实仍全出自上游输出，不引入新数字）+ warning 日志——空报告在机制上不再可能；③Timeline 增强：tool_call 带 symbol/query 参数摘要、tool_result 带 ✓/✗+耗时、critic_verdict 带首轮意见、plan_created 带节点数、task_refused/budget_degraded 带原因（回应用户"能补上让人看得懂的数据吗"）。东财封禁 2h+ 未冷却（留档：演示窗口依赖缓存预灌，M5 评估定时预热）。
 > - v23（2026-08-15）：**strategy_spec 工具 Schema 补全（M2 线上实测发现）**。线上端到端（免费 flash 模式）中 `engine.run_backtest` 连续 4 次翻译失败——根因是工具 schema 里 strategy_spec 仅为无结构 `{"type":"object"}`，模型只能按提示词散文猜格式（错误形态：conditions 包裹层/`args:[l,r]` 代 left-right/操作数 kind 误写指标名）。**修复**：①tools.py 为 strategy_spec 生成精确 JSON Schema（kind/op 枚举、left/right 结构、universe 单标的、嵌套≤3 以展开式 anyOf 表达——规避部分网关 $ref 兼容差异、additionalProperties=False 对齐 extra=forbid）；②strategy.yaml 提示词补精确格式示例（字段名必须完全一致、条件不再包层）。同轮 M2 部署发现留痕：**东财对海外 IP 累计限流**（首拉成功→任务突发 8 请求后该 IP 任意窗口 RemoteDisconnected，与窗口大小无关；ADR-0003 无 SLA 风险的真实实例）→marketcache 预灌 demo 窗口兜底（scripts/m0_seed_cache.py）；部署器 SFTP"间歇失败"实为 **Git Bash MSYS 路径转换**改写远端路径参数（`MSYS_NO_PATHCONV=1` 修复+exec/base64 push 兜底，scripts/deploy_ssh.py；初判"安全层节流"为误诊已更正）。
 > - v22（2026-08-15）：**embedding 三层回退链（RAG 向量检索恢复）**。用户提供 SiliconFlow key（免费层）；实测 `BAAI/bge-m3` 经 OpenAI 兼容端点返回 **1024 维**——与 DDL `vector(1024)` 精确匹配，RAG 向量检索恢复（此前该 key 的智谱 embedding-3/-2 持续 1113、BM25 降级运行）。**实现**：config 增 `siliconflow_api_key/base_url/embedding_model`（key 为空自动跳过该层）；`llm.py` 增 `EMBED_PROVIDER` 全局 + `_embed_siliconflow_sync`（httpx + Bearer；zhipuai SDK 的 JWT 签名不适用第三方），`embed()` 按 provider 分发（asyncio.Lock 串行语义不变）；`rag.probe()` 链扩为 [zhipu e3 → zhipu e2 → siliconflow bge-m3]，探针日志带 provider。**配套**：`migrations/002_hnsw.sql` 启用（维度实测依据=1024）；`.env.example` 增 SILICONFLOW_API_KEY 占位。**边界声明**：embedding 侧自此非单厂商（LLM chat 仍纯 GLM——ADR-002 不变；ADR-0005 补注多厂商 embedding 治理）；智谱侧维度实测仍待按量余额（回填后 DDL 不变）。
 > - v21（2026-08-15）：**免费运行模式加固**（用户决定 API 转免费后实测发现；明细 `docs/verification/M0-记录.md` §3.6）。**P1×1**：`llm.chat` 原 3 次尝试 + 1s/2s 退避不足以吸收免费层过载限流（429 code 1305「该模型当前访问量过大」，秒级突发；实测端到端任务推进至 critic 修订循环后 `failed: RuntimeError`）——升为 4 次尝试 + 2s/4s/8s 退避（总附加时延上限 14s/模型，仍在单次调用 timeout=60s 量级内，预算语义不变）。**运行配置（不改代码/ADR）**：`backend/.env` 免费模式块——`PLANNER_MODEL=glm-4.7-flash`、`JUDGE_MODEL=glm-4.7-flash`（worker/fallback 本即 flash，四角色全落该 key 免费层）、`BUDGET_WALL_CLOCK_S=600`（免费层退避拉长任务时长，实测触碰默认 300s 墙钟一次 degraded——预算降级路径按设计产出带标注部分结果）；embedding 无免费额度→探针失败→BM25 降级（设计内）。**GitHub 接入**：仓库 https://github.com/2014796227/AI-Agent-LLM-Job ，CI 首跑绿（`.github/workflows/ci.yml`，backend pytest + frontend npm ci/tsc -b 双 job）；推送侧留档：本机全局 `url.gh-proxy.insteadOf` 只读镜像会劫持 github.com 写操作，仓库本地 `pushInsteadOf` 同值抵消 + `gh auth setup-git` 凭据。
@@ -1270,10 +1271,24 @@ async def _execute(task_id: str, input_text: str, budget: TaskBudget,
               + f"\n\n上游结论黑板：\n{_digest({k: v for k, v in context.items() if not k.startswith('_')})}"}],
             model=writer.model)
         budget.spend_llm(rw.usage_tokens)
-        draft = rw.text
+        # v24（线上实测发现）：修订输出为空（免费层偶发空 content）时保留原稿
+        # ——绝不因一轮空修订把报告回退为空
+        if rw.text.strip():
+            draft = rw.text
+        else:
+            log.warning("writer_revise_empty_kept",
+                        task_id=task_id, round=round_)
         await _emit_safe(task_id, "agent_end",
                          {"agent": "writer", "node": plan.final,
                           "note": f"revise_round_{round_}"})
+    # v24：writer 全程空输出（数据缺失+critic 连续 revise 压力下实测发生）→
+    # 不得静默"done+空报告"：以各节点结论黑板拼一份明示降级的报告
+    # （事实仍全部出自工具返回/上游节点输出，不引入新数字）
+    if not draft.strip():
+        draft = ("（撰写者未产出有效报告，以下为各节点结论摘要——本任务降级）\n\n"
+                 + _digest({k: v for k, v in context.items()
+                            if not k.startswith("_")}))
+        log.warning("writer_empty_report_fallback", task_id=task_id)
     context[plan.final]["output"] = draft
     context["_report"] = draft
 
@@ -2906,6 +2921,14 @@ const LABEL: Record<string, string> = {
   task_interrupted: "任务中断"
 };
 
+// v24：工具参数摘要（只取 symbol/query/artifact_id 一类可读键，不整串解析）
+const ARGS_KEY = /"(?:symbol|query|artifact_id)"\s*:\s*"([^"]{0,24})"/;
+function argBrief(args?: string): string {
+  if (!args) return "";
+  const m = ARGS_KEY.exec(args);
+  return m ? `（${m[1]}…）` : "";
+}
+
 export default function Timeline({ events }: { events: Ev[] }) {
   return (
     <div style={{ margin: "16px 0" }}>
@@ -2913,10 +2936,24 @@ export default function Timeline({ events }: { events: Ev[] }) {
         <div key={e.seq}
              style={{ fontSize: 13, padding: "2px 0", opacity: .85 }}>
           <code>#{e.seq}</code> {LABEL[e.type] ?? e.type}
-          {e.payload?.agent && ` · ${e.payload.agent}`}
-          {e.payload?.tool && ` · ${e.payload.tool}`}
-          {e.payload?.ms != null && ` · ${e.payload.ms}ms`}
-          {e.payload?.verdict && ` · ${e.payload.verdict}`}
+          {(e.type === "agent_start" || e.type === "agent_end")
+            && e.payload?.agent && ` · ${e.payload.agent}`}
+          {e.type === "tool_call" && e.payload?.tool
+            && ` · ${e.payload.tool}${argBrief(e.payload.args)}`}
+          {e.type === "tool_result" && e.payload?.tool
+            && ` · ${e.payload.tool} ${e.payload.ok ? "✓" : "✗"}`
+              + (e.payload?.ms != null ? ` ${e.payload.ms}ms` : "")}
+          {e.type === "critic_verdict" && e.payload?.verdict
+            && ` · ${e.payload.verdict}`
+              + (e.payload?.issues?.length
+                   ? `（${String(e.payload.issues[0]).slice(0, 30)}）` : "")}
+          {e.type === "plan_created"
+            && Array.isArray(e.payload?.nodes)
+            && ` · ${e.payload.nodes.length} 个节点`}
+          {e.type === "task_refused" && e.payload?.reason
+            && ` · ${String(e.payload.reason).slice(0, 40)}`}
+          {e.type === "budget_degraded" && e.payload?.reason
+            && ` · ${e.payload.reason}`}
         </div>
       ))}
     </div>
@@ -3718,6 +3755,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v24：空报告防御（writer 空 content 保留原稿/黑板拼降级报告，机制上杜绝 done+空报告）+ Timeline 可读性增强（参数摘要/✓✗/意见/节点数/原因）。触发：用户线上反馈（东财封禁窗口+critic 压力致空报告）。
 - v23：strategy_spec 工具 Schema 补全（M2 线上：flash 4 次翻译失败→精确 Schema+提示词示例）；东财海外 IP 累计限流留痕（缓存预灌兜底）；部署器 MSYS 路径转换误诊更正。
 - v22：embedding 三层回退链（RAG 向量检索恢复）。SiliconFlow 免费 bge-m3 实测 1024 维匹配 DDL；config 三新字段（key 空则跳层）；llm.embed 按 EMBED_PROVIDER 分发（httpx+Bearer）；probe 链 [zhipu e3→e2→siliconflow]；002_hnsw 启用；.env.example 补占位。验证：宿主+容器探针（vector_ok=true 首次）、向量 drill mode=vector 命中 0.7286、HNSW CREATE INDEX、29 测试绿。C2 工程目的达成（智谱数值待余额补录）；embedding 侧非单厂商（ADR-0005 补注，chat 仍纯 GLM）。
 - v21：免费运行模式加固（M0-记录 §3.6）。P1：chat 重试 3→4 次、退避 1s/2s→2s/4s/8s（吸收免费层 429-1305 过载突发，实测任务曾因此 failed）；免费模式 env 配置（四角色 flash+墙钟 600s）与 GitHub 接入（CI 首跑绿）留痕。
