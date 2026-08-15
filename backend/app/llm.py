@@ -47,7 +47,11 @@ class LLMClient:
         queue = list(dict.fromkeys(queue))
         last_err = None
         for m in queue:
-            for attempt in range(3):
+            # v21（免费运行模式实测发现）：免费层过载限流（429 code 1305）为
+            # 秒级突发，原 3 次尝试 + 1s/2s 退避不足以吸收（实测端到端任务
+            # 因此 failed）；升为 4 次尝试 + 2s/4s/8s 退避。总附加时延上限
+            # 14s/模型，仍在单次调用 timeout=60s 的量级内，不改变预算语义。
+            for attempt in range(4):
                 try:
                     resp = await asyncio.to_thread(
                         self._chat_sync, messages, tools, m, temperature)
@@ -64,8 +68,8 @@ class LLMClient:
                     raise
                 except Exception as e:
                     last_err = e
-                    if attempt < 2:
-                        await asyncio.sleep(2 ** attempt)
+                    if attempt < 3:
+                        await asyncio.sleep(2 ** (attempt + 1))
         raise RuntimeError(f"LLM 全部重试失败: {last_err}")
 
     def _embed_sync(self, texts, model, dim):
