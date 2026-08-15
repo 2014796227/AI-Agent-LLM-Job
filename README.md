@@ -22,7 +22,7 @@
 
 ## 当前状态
 
-蓝图代码已落仓为真实文件并通过 M0 事实核验（`docs/BLUEPRINT.md` **v20** 为唯一权威来源；实测发现与修复明细见 `docs/verification/M0-记录.md` §5.1/§3.5）：29 项单测全绿（Py3.11）、AKShare 双口径实证 + **hfq 重叠窗口一致**（ADR-0003 已回填）、评测快照 ×2 已生成、Compose 三容器健康、guarded finish 冲突/并发冒烟/备份链/reconcile 零悬空演练全过；**真实 GLM 链路端到端任务全绿**（Supervisor→research/strategy/writer→critic→done，报告全数字带 artifact 引用与 hfq/raw 双口径标注，SSE 经 nginx 不缓冲）。M0 实测共发现并修复 12 项缺陷（含 2 个 P0），全部同步回蓝图并留痕。**待办**：C2（embedding-3 实测维度，key 的 embedding 侧 1113 待按量余额）；M1（GitHub 仓库 + Actions CI——workflow 已备好待 push）。**尚未部署上线**。里程碑：M0 事实核验 → M1 骨架+CI → M2 单 Agent MVP 上线 → M3 Multi-Agent 内核 → M4 RAG+Memory → M5 评测与加固 → M6 收尾。M2 前本 README 如实描述为"单 Agent 阶段"。
+蓝图代码已落仓为真实文件并通过 M0 事实核验（`docs/BLUEPRINT.md` **v20** 为唯一权威来源；实测发现与修复明细见 `docs/verification/M0-记录.md` §5.1/§3.5）：29 项单测全绿（Py3.11）、AKShare 双口径实证 + **hfq 重叠窗口一致**（ADR-0003 已回填）、评测快照 ×2 已生成、Compose 三容器健康、guarded finish 冲突/并发冒烟/备份链/reconcile 零悬空演练全过；**真实 GLM 链路端到端任务全绿**（Supervisor→research/strategy/writer→critic→done，报告全数字带 artifact 引用与 hfq/raw 双口径标注，SSE 经 nginx 不缓冲）。M0 实测共发现并修复 12 项缺陷（含 2 个 P0），全部同步回蓝图并留痕。**当前以免费运行模式运行**（四角色全部 glm-4.7-flash 免费层，env 覆盖、ADR-002 设计分工不变；embedding 侧无免费额度→检索 BM25 降级，M0-记录 §3.6）。**待办**：C2（embedding-3 实测维度，待按量余额）；M1 收口（GitHub push + CI 首跑）。**尚未部署上线**。里程碑：M0 事实核验 → M1 骨架+CI → M2 单 Agent MVP 上线 → M3 Multi-Agent 内核 → M4 RAG+Memory → M5 评测与加固 → M6 收尾。M2 前本 README 如实描述为"单 Agent 阶段"。
 
 ## 技术栈（纯智谱 GLM 单厂商）
 
