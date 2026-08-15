@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v19 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v20 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v20（2026-08-15）：**M0 端到端补验轮**（用户提供 API key 后的真实链路验证；失败原文与证据见 `docs/verification/M0-记录.md` §3/§5.8）。**P0×1**：①`agent_loop.run_agent` 内 `from app.tools import registry` 引用不存在的对象（tools.py 只有模块级 `schemas()/execute()` 与 `REGISTRY` 字典）——**首个真实 Agent 节点即 ImportError**（v18~v19 均未现形：单测不覆盖 run_agent，静态审查两轮漏检 import 目标）；改 `from app.tools import schemas as tool_schemas, execute as tool_execute`。**P1×1**：②模型无当前日期概念——"近三年"被 Supervisor 解析为 2021-2024（训练截止时钟，偏移两年）；`orchestrator._execute` 的规划用户消息注入日期锚点（`今天是 {date}，相对时间以该日期解析`，与 Memory 注入同一位、事实仍以工具为准）。**安全×1**：③Dockerfile `COPY . .` 把含密钥的 backend/.env 烤进镜像（compose env_file 仅运行期注入）——新增 `backend/.dockerignore`（排除 .env/.venv/缓存），重建后验证 `/app/.env` 不存在。**内容钉死×1**：`.github/workflows/ci.yml`（M1 交付：ubuntu + Py3.11 + pytest / node20 + npm ci + tsc -b，双 job；本地已等价验证）。**实测通过（真实 GLM 链路）**：C1 glm-4.6（usage 189/167）与 glm-4.7-flash（usage 154/146/170）真实调用；**tools=None 路径闭环**（生产 llm.chat 默认即此形态，双模型成功佐证 SDK 接受）；流式 tool_calls 增量拼接（get_weather+合法 JSON args）；flash 真实工具往返（market.price_history+正确参数）；**端到端任务三跑**——首跑暴露①修复；二跑暴露②且数据失败时报告**如实声明零编造**（诚实性规范实证）；三跑全绿（trace_id=4fd2ac796bd7：research→strategy→writer→critic→done，41 事件/210s，报告 1488 字符全数字带 [[art_id]] 引用，raw 展示/hfq 计算双口径标注正确，回测净值 0.8126 与报告 -18.74% 一致）；**SSE 经 nginx 反代不缓冲实证**（预判故障#3 闭环）。**key 差异结论（§3 coding-plan 项）**：该 key 有效；glm-4.7-flash 免费层稳定可用；glm-4.6 付费侧**间歇性 1113**（余额不足/资源包口径，60s 不恢复非 RPM；生产 chat 的 3 次重试+flash fallback 可吸收）；**embedding-3/embedding-2 持续 1113**（疑似不在资源包内，C2 与 ADR-0005 embedding-2 带 dimensions 观察仍阻塞待按量余额）。**环境留档**：容器内 diskcache 目录从宿主直拷不可靠（`key in cache` True 而 `get()` None——索引/blob 布局跨环境拷贝非受支持路径），改容器内 diskcache API 重灌（fixture→cache，724 行命中）。
 > - v19（2026-08-15）：**M0 落仓实测修复轮**（代码首次从蓝图落盘为真实文件并全量执行；失败原文与修复明细见 `docs/verification/M0-记录.md`）。**部署链两处阻断**：①compose 顶键 `volumes:` 误缩进于 `services:` 之下→`docker compose` 校验失败（`services.volumes additional properties 'appdata','marketcache','pgdata' not allowed`）——移回顶层；②Dockerfile CMD exec 形式 JSON 数组跨行→解析失败（`unknown instruction: --proxy-headers`，v15 拆行引入）——合并单行。**运行链一处 P0**：③pydantic-settings v2 默认 extra='forbid'，.env 中 DB_PASS/ADMIN_TOKEN（compose/backup 共享变量、非应用字段）使 `Settings()` 抛 extra_forbidden——本地 pytest 全挂、api 容器启动即崩；改 `SettingsConfigDict(env_file=".env", extra="ignore")`（.env 按部署设计为应用与 compose 共用，应用侧忽略不认识的键）。**依赖约束一处**：④requirements `httpx~=0.27` 允许解析 0.28.x，httpx 0.28 移除 sniffio 而 zhipuai 2.1.5 直接 import sniffio→ModuleNotFoundError（import 期崩溃，镜像 pip 安装不报错、启动才炸）；钉 `httpx~=0.27.0`。**测试五处缺陷**（实现与 docstring 契约/ADR-0004 一致，测试期望/数据错误；历轮审查"数值已手算复核"的结论证明只做纸面推演未实跑，M0 实跑全部现形）：⑤test_fill_timing_contract 的 signal_close 断言 1.1 与契约 shift(1) 自相矛盾（信号 d1→首收益区间 d1→d2=0，净值 1.0）；⑥test_hand_computed_with_fee 手算漏计第二笔费（d4 平仓费：1.0995×0.9995≈1.0990，曲线按 4 位舍入为 1.099）；⑦test_max_drawdown 原数据 next_close 捕获段净额恰为 1（9/12×13/9×12/13），total_return=0——末值 12→14；⑧test_hhv_excludes_today 5 行数据撑不起 exit 的 MA20 窗口（需 21 行）——扩至 25 行；⑨test_chunk_page_attribution 文本 15 字符<20 字符"无文本层"阈值，自触拒绝——加长文本。**实测通过（M0）**：29 项单测全绿（Py3.11 venv）；AKShare 600519 双口径 724 行 10 列；**hfq 重叠窗口实证=一致**（261 重叠日×10 列逐日最大绝对差全 0.0，ADR-0003 已回填）；fixtures ×2 生成+`_load_fixture` 回读校验；Compose 三容器健康（db healthy/api/web up，healthz 直连与经 nginx 均通，无 key 时探针优雅降级 vector_ok=false 不阻止启动）；D2 guarded finish 冲突演练（watchdog 释放 50000→迟到 finish 不覆盖+M_TASK_CONF+1→重启对账 reserved==Σ(pending.reserved)）；D3 并发冒烟（HTTP 面：双任务并行期 healthz 60 次 max 16ms；容器内：两路 to_thread 并发网络 IO 180 请求期间事件循环 max_lag 2.2ms、心跳续租 59 次）；C3 代码级 BM25 查询级降级（bm25_degraded+明示 note+M_RAG_FALLBACK+1+日志留痕）；D4 备份链（pg_dump→tar→TTL→reconcile 零悬空；安全检查：外部 /api/admin 与 /metrics 403、回环 :8000/metrics 200）。**环境发现（非缺陷，留档）**：东财接口从 Docker Desktop(Windows) 容器出网被断连（宿主机正常、容器对 baidu/sina 正常）——生产 Linux 主机部署时需复测，行情缓存/fixture 路径不受影响；Git Bash 无 flock（backup.sh 以等价链人工逐步执行，flock 互斥留服务器首次部署验证）；pandas `read_json(literal str)` FutureWarning（~=2.2 钉版下无功能影响，升级 pandas 3 前需改 StringIO，留档观察）。**新增文件**（FILE-MANIFEST 已声明）：`scripts/m0_akshare_checks.py`/`m0_drill_guarded_finish.py`/`m0_drill_concurrency.py`/`m0_drill_concurrency_http.py`/`m0_drill_bm25_fallback.py`（M0 演练脚本，证据可复现）、fixtures meta sidecar ×2、`frontend/package-lock.json`（锁定依赖，M1 CI 前置）。
 > - v18（2026-08-15）：独立逐行复核轮（报告：`docs/verification/v18-审查报告.md`。P1×1/P2×1/P3×6/设计确认×1/内容钉死×5）。**P1-1（修复）recover_on_boot 预留双重释放**：v16 的对账 upsert 已把当日 reserved **整列重置**为 Σ(pending.reserved)——这本身已是正确终态（running 任务的预留随重置清除），但循环内残留 v15 的 `_release_of(r)` 再逐个扣减→reserved 被低估（GREATEST 兜底也归 0）→`reserve_daily` 闸门按低估额放行，日预算可被超占（违反 PRD"击穿前 429"）。数字推演：崩溃时 A(running,120k)+B(pending,120k)，重启后 upsert 置 120k→再释放 A→账面 0，而 B 实占 120k。修复：删去该释放调用（事件发射与 M_TASK 计数保留；watchdog 路径不变——其无对账，逐个释放仍正确）。v17 未捕获原因：需"upsert=整列替换语义 × 残留释放循环"两个 v16 变更叠加推演，单点逐行看各自都"合理"。**P2-1（修复）评测 fixture 列契约未约定**：`_run_backtest` 无条件求值 `open_=df["open_hfq"]`（next_close 口径也取）、`artifacts.summary` 需 close/high/low_raw，而 fixture 命名"…_hfq_…"暗示仅 hfq 列、生成约定未钉死——M0 生成快照若缺列，strategy 工具 KeyError 假失败难定位。修复：`_load_fixture` 加载即校验 10 列齐备（fail-fast 明确文案）+ fixtures README 钉死生成契约（hfq=计算口径非列范围，v18 内容钉死⑤）。**P3×6**：①useTaskStream onFatal 重试加上限（连续 5 次→setError 明示"任务可能不存在或已过期"；事件到达清零计数，瞬时抖动不耗尽——陈旧 localStorage taskId 的 /stream 恒 404，原为无限静默重订阅）；②EquityChart fetch 补 r.ok 检查/410 专属文案/catch 渲染错误行（v17 修了 api.ts/useTaskStream 漏了本组件）；③doc_page render() 的 fitz doc 与缓存读改 with 显式管理（不依赖 GC 时机；Pixmap 在 doc 关闭后仍可用）；④chunk_pdf docstring 声明 size 为目标值非硬上限（无换行单行长文本可超出，对嵌入/BM25/页级引用无影响，不加强切）；⑤recover_on_boot docstring 声明 claim/get 阶段 DB 瞬断→任务滞留 pending（finish 的 running 条件不匹配→仅冲突计数），由重启对账自愈（D-5，不加运行时重试）；⑥`_execute` 循环内 on_event 闭包晚绑定加注释（串行拓扑下安全；ADR-0001 并行化 P2 演进前需按 node 显式传参）。**内容钉死×5**（FILE-MANIFEST 原标"新增"但内容未入蓝图，与"唯一权威来源"声明有缝）：tsconfig.json（verbatimModuleSyntax=true/lib=ES2020/noUnusedLocals——v17 P3-9 的 import type/去 .at(-1) 约束由此落实并有出处）、tsconfig.node.json（composite 供 references）、index.html、tests/conftest.py（仅 sys.path 注入）、evals/fixtures/README.md；连带 main.tsx 删除 React 导入（react-jsx 变换下未使用，noUnusedLocals 会报）。**M0 新增实测项**：zhipuai SDK `tools=None`（supervisor/critic/writer 无工具路径）的序列化行为（M0-记录 §3）。
 > - v17（2026-08-15）：静态逐行审查轮（完整报告：`docs/verification/v17-审查报告.md`；P0×1/P1×4/P2×3/P3×10 + 设计确认×4 + 误报归档×4）。**P0-1（修复）get_task 返回 jsonb 原始字符串**：asyncpg 默认不解码 jsonb（db.py 无 codec）→ 前端 `taskInfo.result.report` 恒 undefined → **投研报告永不渲染**；评测路径 `_find_report` 恰有 `isinstance(str)` 处理而掩盖此缺陷。修复：get_task 内 json.loads（不动 db.py 全局 codec——那需同步改动 fetch_history/summary/memory 等已手动 loads 的调用点，局部修复最小且无回归面）。**P1-1（修复）backup.sh cron 下必败**：cron cwd=$HOME，docker compose 只在 cwd 查找 compose 文件（不像 git 向上搜索）→ 第①步 pg_dump 即报 "no configuration file provided"；脚本头加 `cd "$(dirname "$0")"`。**P1-2（修复）llm.embed 以 threading.Lock 跨 await 串行**：争用方在事件循环线程上同步阻塞等锁，持锁方 API 往返期间整个服务（心跳/SSE/请求）停摆；改 asyncio.Lock（串行化语义不变、等待方挂起而非阻塞循环）。**P1-3（修复）embedding-2 回退仍传 dimensions=1024**：dimensions 是 embedding-3 的参数，embedding-2 固定 1024 维、携带可能被 API 拒绝 → 回退探针失败 → 向量检索永久降级 BM25；fallback 模型不传 dimensions（M0-记录 §3 补实测项）。**P1-4（修复）前端事件流三处**：①useTaskStream 历史 fetch 无 closed 守卫——旧任务响应覆盖新任务 events 且 lastSeq 被全局 seq 污染 → append 吞新任务事件；②async IIFE 无 try/catch，网络错误静默；③subscribe 无 onerror——EventSource 遇 429（订阅上限）按规范永久失败且完全静默。修复：closed 守卫 + try/catch + onerror（仅 readyState===CLOSED 致命时 3s 退避重订阅；CONNECTING 为浏览器内置重连不动作，防叠加）。**P2-1（修复）评测器三处**：`_find_spec` 解析被 [:2000] 截断的 tool_call args，超长 spec 假阴性 → 回退从回测工件读 strategy_spec（实际执行的规范化 spec 本就是更准确的断言对象）；tools_called 空断言 `all([])=True` 空真 → None（未断言）；yaml 声明的 backtest_recompute.fill/tolerance 被硬编码忽略 → 按声明读取。**P2-2（修复）M_BUDGET 语义污染**：critic_parse_failopen 计入"预算熔断"计数器污染 deploy.md 告警口径 → 拆出独立计数器 M_CRITIC_FAILOPEN。**P2-3（修复）ChatBox 旧任务报告残留**：taskInfo 不随 taskId 重置，新任务运行期间持续显示旧报告 → taskId 变化即清空。**P3×10**：`_critic_round` 尾不可达 return 删除（死代码）；replay_then_live poll 分支补 status None 对称检查（任务行实际不可删，防御性）；nginx `/metrics` 的 `allow 127.0.0.1` 为死配置（无 proxy_pass，放行后仍 404）→ 纯 deny all + 注释（采集直连 127.0.0.1:8000）；api.ts createTask 对非 JSON 错误体 r.json() 抛 SyntaxError → try/catch 回退 statusText；doc_page pagecache 并发渲染 pix.save 直写 → tmp+os.replace 原子化（对齐不变式5精神）；compose db/web 补 restart: always（原仅 api 有）；`_symbols_in` 收紧为 A 股交易所前缀 `(60|00|30|68|43|83|87|92)\d{4}`（防"100000股"误命中污染 memories）；rag.search 查询级向量→BM25 降级补 log.warning + M_RAG_FALLBACK 计数器（与探针级 embedding_dim_ok 区分：探针级看仪表、查询级看本计数）；前端 `import type` / 去 `.at(-1)`（防 verbatimModuleSyntax 与 tsconfig lib<ES2022 构建失败）；FILE-MANIFEST 模块计数 18→20。**设计确认（注释声明，不改行为）**：D-1 flash 入口（model==fallback）经去重退化为单模型链，回落 GLM-4.6 违背 ADR-002 成本结构（免费层职责），chat docstring 改如实声明；D-2 中断任务（watchdog/恢复）实际消耗 token 不入日账——死亡进程消耗不可知，释放权唯一性（不变式7）优先于记账精度；D-3 release_daily 跨午夜：UPDATE 落新日行（可能 no-op）→ token 低估不计、昨日 reserved 滞留该行（无害），偏差方向保守，演示级接受；D-4 chat 并发无锁 vs embed 串行的刻意不对称（chat 走 httpx 请求级线程安全）。**误报归档（防后续轮次重复提出）**：pagecache 无限增长不成立（docs 行无删除路径，规模=语料总页数，天然有界）；"depends_on 只引用更早 id"未代码强制非缺陷（拓扑序兜底任意 DAG，环会断言失败）；测试 sleep(0.01) 门控时序可接受（fake 无真挂起点，单事件循环切片内必达 q.get，v15 已注释）；metrics 中间件对 500 不计数（异常穿透 ServerErrorMiddleware，500 有独立告警面，接受）。
@@ -49,6 +50,7 @@ alphadesk/
 │   └── src/ main.tsx App.tsx lib/{api.ts,useTaskStream.ts}
 │             components/{ChatBox,EquityChart,Timeline}.tsx
 ├── deploy/ docker-compose.yml nginx.conf backup.sh
+├── .github/workflows/ci.yml  (M1 起源码见仓库；内容 v20 钉死)
 ├── scripts/ run_eval.py reconcile.py ingest.py
 ├── evals/ cases/*.yaml fixtures/
 ├── migrations/ 001_init.sql 002_hnsw.sql(M0后)
@@ -703,11 +705,14 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                     on_event=_noop_event) -> tuple[str, int]:
     """返回 (最终文本, 累计tokens)。工具子集=spec.tools；步数=spec.max_steps。
     BudgetExceeded 向上传播由编排器降级；步数熔断返回明确文案+最后模型文本。"""
-    from app.tools import registry
+    # v20（M0 端到端实测发现）：tools.py 提供模块级 schemas()/execute() 与
+    # REGISTRY 字典——v18 起此处误写 `from app.tools import registry`（不存在的
+    # 对象），首个真实 Agent 节点即 ImportError（单测不覆盖 run_agent 故未现形）
+    from app.tools import schemas as tool_schemas, execute as tool_execute
     messages = [{"role": "system", "content": spec.system_prompt},
                 {"role": "user",
                  "content": f"任务背景（上游结论摘要）：\n{context_digest}\n\n你的任务：\n{instruction}"}]
-    schemas = registry.schemas(spec.tools)
+    schemas = tool_schemas(spec.tools)
     total_tokens = 0
     last_text = ""
     for step in range(spec.max_steps):
@@ -733,7 +738,7 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                                args=json.dumps(args, ensure_ascii=False,
                                                default=str)[:2000])
                 t0 = time.monotonic()
-                result = await registry.execute(tc.name, args, ctx=ctx or {})
+                result = await tool_execute(tc.name, args, ctx=ctx or {})
                 ms = int((time.monotonic() - t0) * 1000)
                 await on_event(type="tool_result", agent=spec.name, tool=tc.name,
                                ok=True, ms=ms,
@@ -1155,8 +1160,14 @@ async def _execute(task_id: str, input_text: str, budget: TaskBudget,
                    context: dict, eval_ctx: dict):
     sup = AGENTS["supervisor"]
     mem = await _memory_lines(input_text)
-    user_msg = (input_text if not mem else
-                input_text + "\n\n（跨任务记忆，仅供背景参考，"
+    # v20（M0 端到端实测发现）：模型无当前日期概念——"近三年"被解析为
+    # 2021-2024（训练截止时钟），与真实区间偏移两年。注入日期锚点，
+    # 相对日期一律以它解析（与 Memory 注入同一消息位，事实仍以工具为准）。
+    date_line = (f"今天是 {dt.date.today().isoformat()}。"
+                 f"用户输入中的相对时间（如\"近三年\"）必须以该日期解析。")
+    user_msg = (date_line + "\n" + input_text if not mem else
+                date_line + "\n" + input_text +
+                "\n\n（跨任务记忆，仅供背景参考，"
                 "事实与数字仍必须以工具返回为准：）\n" + mem)
     budget.check_llm()
     r = await llm().chat([{"role": "system", "content": sup.system_prompt},
@@ -2362,6 +2373,61 @@ curl -s -X POST -H "X-Admin-Token: ${ADMIN_TOKEN}" \
 echo "backup $STAMP done"
 ```
 
+### `.github/workflows/ci.yml`（v20 钉死，M1 交付）
+```yaml
+# M1：GitHub Actions CI（对应里程碑"Py3.11，pytest+tsc -b，锁定依赖"）
+# 后端 29 项单测不需要 DB 与 API key（tests/conftest.py 仅注入 sys.path）；
+# 前端 npm ci 依赖已提交的 package-lock.json；tsc -b 在 npm run build 内执行。
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r backend/requirements.txt
+      - name: pytest
+        working-directory: backend
+        run: pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci + build (tsc -b)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+```
+
+### `backend/.dockerignore`（v20 新增，M0 端到端实测发现）
+```
+# Dockerfile `COPY . .` 会把含密钥的 .env 烤进镜像（compose 的 env_file 仅
+# 负责运行期注入，构建期烤入属泄露面）；同时排除本地 venv/缓存。
+.env
+.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.data/
+.cache/
+```
+
 ### `scripts/reconcile.py`
 ```python
 """恢复后对账：逐行校验文件存在；孤儿文件（含 *.tmp 残留）删除并计数。
@@ -3555,6 +3621,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v20：M0 端到端补验轮（真实 API key 链路；明细：M0-记录 §3/§5.8）。P0：agent_loop `import registry` 引用不存在对象（首个真实 Agent 节点即 ImportError，静态审查两轮漏检）；P1：Supervisor 无日期锚点，"近三年"解析为 2021-2024；安全：.env 被烤进镜像→新增 .dockerignore；内容钉死：.github/workflows/ci.yml（M1）。实测：C1 双模型 usage/tools=None/流式拼接/工具往返/端到端三跑（末跑全绿 trace_id=4fd2ac796bd7，报告全引用+双口径）/SSE 经 nginx 实证。key 差异：flash 免费稳定、glm-4.6 间歇 1113、embedding 家族持续 1113（C2 阻塞待按量余额）。
 - v19：M0 落仓实测修复轮（明细与失败原文：docs/verification/M0-记录.md）。部署链阻断×2（compose volumes 顶键缩进/Dockerfile CMD 跨行）；运行链 P0×1（pydantic-settings extra_forbidden 拒绝 .env 共享变量）；依赖约束×1（httpx ~=0.27 解析到 0.28 致 zhipuai import 崩溃，钉 0.27.0）；测试缺陷×5（signal_close 断言/费率手算/捕获段净额/窗口行数/文本阈值，全部为测试错、实现与契约一致）。实测通过：29 单测+AKShare 实证（hfq 重叠一致，ADR-0003 回填）+fixtures+Compose+D2/D3/C3/D4 演练。环境留档：容器出网东财被拒/flock 缺失/pandas FutureWarning。新增 M0 演练脚本×5+meta sidecar+package-lock。
 - v18：独立逐行复核轮（报告：docs/verification/v18-审查报告.md）。P1：recover_on_boot 预留双重释放（upsert 整列重置×残留释放循环叠加，v16 引入 v17 未捕获）。P2：fixture 10 列契约+加载即校验。P3×6（onFatal 重试上限/EquityChart 错误处理/fitz 与缓存读 with 管理/chunk size 软上限声明/on_event 闭包注释/claim 瞬断边界）。设计确认 D-5（claim 瞬断滞留 pending 由重启对账自愈）。内容钉死×5（tsconfig×2/index.html/conftest/fixtures README）+main.tsx 去 React 导入。M0 增 tools=None 实测项。
 - v17：静态逐行审查轮（报告：docs/verification/v17-审查报告.md）。P0：get_task jsonb 未解码→报告永不渲染。P1：backup.sh cron cwd 必败；embed threading.Lock 跨 await 阻塞事件循环；embedding-2 回退误传 dimensions；前端流竞态/静默网络错误/EventSource 致命错误静默。P2：评测器截断假阴性+空真+yaml声明被忽略；M_BUDGET 语义污染；ChatBox 旧报告残留。P3×10（死代码/对称性/nginx死配置/原子写/restart/标的正则/降级可观测/前端构建风险/文档计数）。设计确认×4（flash 单模型链/中断任务记账/跨日边界/chat与embed锁不对称）。误报归档×4（pagecache有界/depends_on软规则/测试时序/500不计数）。

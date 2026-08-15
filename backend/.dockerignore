@@ -1,0 +1,10 @@
+# v20（M0 端到端实测发现）：Dockerfile `COPY . .` 会把含密钥的 .env 烤进镜像
+# （compose 的 env_file 仅负责运行期注入，构建期烤入属泄露面）；同时排除本地
+# venv/缓存，避免镜像膨胀与平台不兼容产物。
+.env
+.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+.data/
+.cache/

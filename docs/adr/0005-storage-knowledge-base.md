@@ -1,6 +1,6 @@
 # ADR-0005：PostgreSQL + pgvector 存储与知识库设计
 
-- 状态：已接受（HNSW 索引待 M0 实测维度后启用）
+- 状态：已接受（HNSW 索引待 M0 实测维度后启用；M0 实测备注：当前 key 的 embedding-3/embedding-2 均报 1113 余额不足——维度实测与 embedding-2 带 dimensions 行为观察待按量付费余额后补，M0-记录 §3）
 - 日期：2026-08-15
 - 决策人：＿＿＿＿（待签名）
 - 关联：蓝图 schema.sql / rag.py；第三轮评审（维度上限问题）；PRD【待你确认】2

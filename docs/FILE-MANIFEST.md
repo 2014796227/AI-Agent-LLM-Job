@@ -1,9 +1,9 @@
 # 文件清单与审查地图（FILE-MANIFEST）
 
 > 用途：逐文件审查的索引。每个文件标注用途、来源（蓝图章节或"新增"）、审查要点。
-> 蓝图本体：`docs/BLUEPRINT.md`（v19，全部代码的唯一权威来源；本清单中"蓝图§"指其章节）。
+> 蓝图本体：`docs/BLUEPRINT.md`（v20，全部代码的唯一权威来源；本清单中"蓝图§"指其章节）。
 > 新增文件=蓝图未含但工程必需或文档体系所需，均已在此声明。
-> v19（M0 落仓轮）新增的执行性文件见 §六 末"v19 新增"块——演练脚本可复现 M0 记录中的全部证据。
+> v19/v20（M0 落仓与端到端补验轮）新增的执行性文件见 §六 末"v19/v20 新增"块——演练脚本可复现 M0 记录中的全部证据。
 
 ## 一、根目录
 
@@ -16,7 +16,7 @@
 
 | 文件 | 用途 | 来源 | 审查要点 |
 |---|---|---|---|
-| `docs/BLUEPRINT.md` | 全量工程代码与架构契约（唯一权威） | 历次评审演化至 v19（M0 落仓实测修复轮） | 已多轮评审+M0 实跑；关注版本记录 |
+| `docs/BLUEPRINT.md` | 全量工程代码与架构契约（唯一权威） | 历次评审演化至 v20（M0 落仓+端到端补验轮） | 已多轮评审+M0 实跑；关注版本记录 |
 | `docs/verification/v17-审查报告.md` | v16→v17 静态逐行审查：P0×1/P1×4/P2×3/P3×10+设计确认+误报归档 | 新增（v17 修订依据） | 分级明细与修复落点索引 |
 | `docs/verification/v18-审查报告.md` | v17→v18 独立逐行复核：P1×1/P2×1/P3×6+设计确认 D-5+内容钉死×5 | 新增（v18 修订依据） | 数字推演明细与复检结论留档 |
 | `docs/provenance.md` | 产出物真实性与可追溯性规范 | 蓝图 Part 0 展开 | 禁止事项与追溯链是否完备 |
@@ -110,6 +110,15 @@
 | `scripts/m0_drill_concurrency_http.py` | D3 HTTP 面：双任务并行提交+healthz 时延监测 |
 | `scripts/m0_drill_bm25_fallback.py` | C3 代码级：向量→BM25 查询级降级（api 容器内） |
 | `frontend/package-lock.json` | npm 锁定依赖（M1 CI 前置；E2 首装生成） |
+
+**v20 新增（M0 端到端补验轮）**
+
+| 文件 | 用途 |
+|---|---|
+| `backend/.dockerignore` | 防止含密钥的 .env 被烤进镜像（蓝图 Part 6 v20 钉死） |
+| `.github/workflows/ci.yml` | M1 CI：ubuntu+Py3.11+pytest / node20+npm ci+tsc -b（蓝图 Part 6 v20 钉死，待 GitHub push 后首跑） |
+| `scripts/m0_llm_checks.py` | §3 GLM/embedding 实测（逐项容错，quota 差异记录） |
+| `scripts/m0_e2e_task.py` | 端到端真实任务驱动：POST /api/chat→SSE 经 nginx→终态报告断言 |
 
 ## 七、审查建议顺序
 

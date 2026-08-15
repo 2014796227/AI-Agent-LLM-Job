@@ -32,11 +32,14 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                     on_event=_noop_event) -> tuple[str, int]:
     """返回 (最终文本, 累计tokens)。工具子集=spec.tools；步数=spec.max_steps。
     BudgetExceeded 向上传播由编排器降级；步数熔断返回明确文案+最后模型文本。"""
-    from app.tools import registry
+    # v20（M0 端到端实测发现）：tools.py 提供模块级 schemas()/execute() 与
+    # REGISTRY 字典——v18 起此处误写 `from app.tools import registry`（不存在的
+    # 对象），首个真实 Agent 节点即 ImportError（单测不覆盖 run_agent 故未现形）
+    from app.tools import schemas as tool_schemas, execute as tool_execute
     messages = [{"role": "system", "content": spec.system_prompt},
                 {"role": "user",
                  "content": f"任务背景（上游结论摘要）：\n{context_digest}\n\n你的任务：\n{instruction}"}]
-    schemas = registry.schemas(spec.tools)
+    schemas = tool_schemas(spec.tools)
     total_tokens = 0
     last_text = ""
     for step in range(spec.max_steps):
@@ -62,7 +65,7 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                                args=json.dumps(args, ensure_ascii=False,
                                                default=str)[:2000])
                 t0 = time.monotonic()
-                result = await registry.execute(tc.name, args, ctx=ctx or {})
+                result = await tool_execute(tc.name, args, ctx=ctx or {})
                 ms = int((time.monotonic() - t0) * 1000)
                 await on_event(type="tool_result", agent=spec.name, tool=tc.name,
                                ok=True, ms=ms,

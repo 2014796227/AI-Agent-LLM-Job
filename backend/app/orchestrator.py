@@ -243,8 +243,14 @@ async def _execute(task_id: str, input_text: str, budget: TaskBudget,
                    context: dict, eval_ctx: dict):
     sup = AGENTS["supervisor"]
     mem = await _memory_lines(input_text)
-    user_msg = (input_text if not mem else
-                input_text + "\n\n（跨任务记忆，仅供背景参考，"
+    # v20（M0 端到端实测发现）：模型无当前日期概念——"近三年"被解析为
+    # 2021-2024（训练截止时钟），与真实区间偏移两年。注入日期锚点，
+    # 相对日期一律以它解析（与 Memory 注入同一消息位，事实仍以工具为准）。
+    date_line = (f"今天是 {dt.date.today().isoformat()}。"
+                 f"用户输入中的相对时间（如\"近三年\"）必须以该日期解析。")
+    user_msg = (date_line + "\n" + input_text if not mem else
+                date_line + "\n" + input_text +
+                "\n\n（跨任务记忆，仅供背景参考，"
                 "事实与数字仍必须以工具返回为准：）\n" + mem)
     budget.check_llm()
     r = await llm().chat([{"role": "system", "content": sup.system_prompt},
