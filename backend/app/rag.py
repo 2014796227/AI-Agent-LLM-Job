@@ -15,23 +15,32 @@ def _dim_ok(vec) -> bool:
     return len(vec) == llm_mod.EMBED_DIM
 
 async def probe() -> bool:
-    """embedding-3(dimensions) 失败→回退 embedding-2(1024)。
+    """embedding-3(dimensions) 失败→回退 embedding-2(1024)→再回退
+    SiliconFlow bge-m3(1024, OpenAI 兼容, 免费; key 为空跳过该层)。
     维度异常仅标记向量检索不可用，不阻止应用启动。"""
     global VECTOR_OK
     VECTOR_OK = False
-    for model, dim in [(settings.embedding_model, settings.embedding_dim),
-                       (settings.embedding_model_fallback, 1024)]:
+    chain = [("zhipu", settings.embedding_model, settings.embedding_dim),
+             ("zhipu", settings.embedding_model_fallback, 1024)]
+    if settings.siliconflow_api_key:
+        chain.append(("siliconflow",
+                      settings.siliconflow_embedding_model, 1024))
+    for provider, model, dim in chain:
         try:
-            llm_mod.EMBED_MODEL, llm_mod.EMBED_DIM = model, dim
+            llm_mod.EMBED_PROVIDER, llm_mod.EMBED_MODEL, llm_mod.EMBED_DIM = \
+                provider, model, dim
             vecs = await llm_mod.llm().embed(["探针"])
             if vecs and len(vecs[0]) == dim:
                 VECTOR_OK = True
-                log.info("embedding_probe_ok", model=model, dim=dim)
+                log.info("embedding_probe_ok", provider=provider,
+                         model=model, dim=dim)
                 return True
-            log.warning("embedding_probe_dim_mismatch", model=model,
-                        expect=dim, got=len(vecs[0]) if vecs else 0)
+            log.warning("embedding_probe_dim_mismatch", provider=provider,
+                        model=model, expect=dim,
+                        got=len(vecs[0]) if vecs else 0)
         except Exception as e:
-            log.warning("embedding_probe_fail", model=model, err=str(e))
+            log.warning("embedding_probe_fail", provider=provider,
+                        model=model, err=str(e))
     return False
 
 def chunk_pdf(path: str, size: int = 600, overlap: int = 80) -> list[dict]:

@@ -19,6 +19,7 @@ class ChatResult:
 # 探针解析出的实际生效嵌入模型与维度（rag.probe() 设置）
 EMBED_MODEL: str = settings.embedding_model
 EMBED_DIM: int = settings.embedding_dim
+EMBED_PROVIDER: str = "zhipu"   # v22：zhipu | siliconflow（rag.probe() 设置）
 # embed 批次串行（SDK线程安全未承诺）。必须 asyncio.Lock 而非 threading.Lock：
 # 后者的 acquire 是同步调用——跨 await 持锁时，争用方会在事件循环线程上原地
 # 阻塞，持锁方 API 往返期间整个服务（心跳/SSE/请求）停摆（v17 P1-2）。
@@ -81,17 +82,33 @@ class LLMClient:
         return self.client.embeddings.create(
             model=model, input=texts, dimensions=dim)
 
+    def _embed_siliconflow_sync(self, texts, model):
+        # v22：OpenAI 兼容端点 + Bearer 鉴权（zhipuai SDK 的 JWT 签名不适用）
+        import httpx
+        r = httpx.post(
+            f"{settings.siliconflow_base_url}/embeddings",
+            headers={"Authorization":
+                     f"Bearer {settings.siliconflow_api_key}"},
+            json={"model": model, "input": texts}, timeout=60)
+        r.raise_for_status()
+        return r.json()["data"]
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """批量≤64；串行锁；使用探针解析的 (EMBED_MODEL, EMBED_DIM)。"""
+        """批量≤64；串行锁；使用探针解析的 (EMBED_PROVIDER, EMBED_MODEL, EMBED_DIM)。"""
         assert len(texts) <= 64
         global EMBED_MODEL, EMBED_DIM
         out: list[list[float]] = []
         for attempt in range(3):
             try:
                 async with _embed_lock:
-                    resp = await asyncio.to_thread(
-                        self._embed_sync, texts, EMBED_MODEL, EMBED_DIM)
-                out = [list(d.embedding) for d in resp.data]
+                    if EMBED_PROVIDER == "siliconflow":
+                        data = await asyncio.to_thread(
+                            self._embed_siliconflow_sync, texts, EMBED_MODEL)
+                        out = [list(d["embedding"]) for d in data]
+                    else:
+                        resp = await asyncio.to_thread(
+                            self._embed_sync, texts, EMBED_MODEL, EMBED_DIM)
+                        out = [list(d.embedding) for d in resp.data]
                 break
             except asyncio.CancelledError:
                 raise

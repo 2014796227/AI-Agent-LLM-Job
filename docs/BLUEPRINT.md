@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v21 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v22 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v22（2026-08-15）：**embedding 三层回退链（RAG 向量检索恢复）**。用户提供 SiliconFlow key（免费层）；实测 `BAAI/bge-m3` 经 OpenAI 兼容端点返回 **1024 维**——与 DDL `vector(1024)` 精确匹配，RAG 向量检索恢复（此前该 key 的智谱 embedding-3/-2 持续 1113、BM25 降级运行）。**实现**：config 增 `siliconflow_api_key/base_url/embedding_model`（key 为空自动跳过该层）；`llm.py` 增 `EMBED_PROVIDER` 全局 + `_embed_siliconflow_sync`（httpx + Bearer；zhipuai SDK 的 JWT 签名不适用第三方），`embed()` 按 provider 分发（asyncio.Lock 串行语义不变）；`rag.probe()` 链扩为 [zhipu e3 → zhipu e2 → siliconflow bge-m3]，探针日志带 provider。**配套**：`migrations/002_hnsw.sql` 启用（维度实测依据=1024）；`.env.example` 增 SILICONFLOW_API_KEY 占位。**边界声明**：embedding 侧自此非单厂商（LLM chat 仍纯 GLM——ADR-002 不变；ADR-0005 补注多厂商 embedding 治理）；智谱侧维度实测仍待按量余额（回填后 DDL 不变）。
 > - v21（2026-08-15）：**免费运行模式加固**（用户决定 API 转免费后实测发现；明细 `docs/verification/M0-记录.md` §3.6）。**P1×1**：`llm.chat` 原 3 次尝试 + 1s/2s 退避不足以吸收免费层过载限流（429 code 1305「该模型当前访问量过大」，秒级突发；实测端到端任务推进至 critic 修订循环后 `failed: RuntimeError`）——升为 4 次尝试 + 2s/4s/8s 退避（总附加时延上限 14s/模型，仍在单次调用 timeout=60s 量级内，预算语义不变）。**运行配置（不改代码/ADR）**：`backend/.env` 免费模式块——`PLANNER_MODEL=glm-4.7-flash`、`JUDGE_MODEL=glm-4.7-flash`（worker/fallback 本即 flash，四角色全落该 key 免费层）、`BUDGET_WALL_CLOCK_S=600`（免费层退避拉长任务时长，实测触碰默认 300s 墙钟一次 degraded——预算降级路径按设计产出带标注部分结果）；embedding 无免费额度→探针失败→BM25 降级（设计内）。**GitHub 接入**：仓库 https://github.com/2014796227/AI-Agent-LLM-Job ，CI 首跑绿（`.github/workflows/ci.yml`，backend pytest + frontend npm ci/tsc -b 双 job）；推送侧留档：本机全局 `url.gh-proxy.insteadOf` 只读镜像会劫持 github.com 写操作，仓库本地 `pushInsteadOf` 同值抵消 + `gh auth setup-git` 凭据。
 > - v20（2026-08-15）：**M0 端到端补验轮**（用户提供 API key 后的真实链路验证；失败原文与证据见 `docs/verification/M0-记录.md` §3/§5.8）。**P0×1**：①`agent_loop.run_agent` 内 `from app.tools import registry` 引用不存在的对象（tools.py 只有模块级 `schemas()/execute()` 与 `REGISTRY` 字典）——**首个真实 Agent 节点即 ImportError**（v18~v19 均未现形：单测不覆盖 run_agent，静态审查两轮漏检 import 目标）；改 `from app.tools import schemas as tool_schemas, execute as tool_execute`。**P1×1**：②模型无当前日期概念——"近三年"被 Supervisor 解析为 2021-2024（训练截止时钟，偏移两年）；`orchestrator._execute` 的规划用户消息注入日期锚点（`今天是 {date}，相对时间以该日期解析`，与 Memory 注入同一位、事实仍以工具为准）。**安全×1**：③Dockerfile `COPY . .` 把含密钥的 backend/.env 烤进镜像（compose env_file 仅运行期注入）——新增 `backend/.dockerignore`（排除 .env/.venv/缓存），重建后验证 `/app/.env` 不存在。**内容钉死×1**：`.github/workflows/ci.yml`（M1 交付：ubuntu + Py3.11 + pytest / node20 + npm ci + tsc -b，双 job；本地已等价验证）。**实测通过（真实 GLM 链路）**：C1 glm-4.6（usage 189/167）与 glm-4.7-flash（usage 154/146/170）真实调用；**tools=None 路径闭环**（生产 llm.chat 默认即此形态，双模型成功佐证 SDK 接受）；流式 tool_calls 增量拼接（get_weather+合法 JSON args）；flash 真实工具往返（market.price_history+正确参数）；**端到端任务三跑**——首跑暴露①修复；二跑暴露②且数据失败时报告**如实声明零编造**（诚实性规范实证）；三跑全绿（trace_id=4fd2ac796bd7：research→strategy→writer→critic→done，41 事件/210s，报告 1488 字符全数字带 [[art_id]] 引用，raw 展示/hfq 计算双口径标注正确，回测净值 0.8126 与报告 -18.74% 一致）；**SSE 经 nginx 反代不缓冲实证**（预判故障#3 闭环）。**key 差异结论（§3 coding-plan 项）**：该 key 有效；glm-4.7-flash 免费层稳定可用；glm-4.6 付费侧**间歇性 1113**（余额不足/资源包口径，60s 不恢复非 RPM；生产 chat 的 3 次重试+flash fallback 可吸收）；**embedding-3/embedding-2 持续 1113**（疑似不在资源包内，C2 与 ADR-0005 embedding-2 带 dimensions 观察仍阻塞待按量余额）。**环境留档**：容器内 diskcache 目录从宿主直拷不可靠（`key in cache` True 而 `get()` None——索引/blob 布局跨环境拷贝非受支持路径），改容器内 diskcache API 重灌（fixture→cache，724 行命中）。
 > - v19（2026-08-15）：**M0 落仓实测修复轮**（代码首次从蓝图落盘为真实文件并全量执行；失败原文与修复明细见 `docs/verification/M0-记录.md`）。**部署链两处阻断**：①compose 顶键 `volumes:` 误缩进于 `services:` 之下→`docker compose` 校验失败（`services.volumes additional properties 'appdata','marketcache','pgdata' not allowed`）——移回顶层；②Dockerfile CMD exec 形式 JSON 数组跨行→解析失败（`unknown instruction: --proxy-headers`，v15 拆行引入）——合并单行。**运行链一处 P0**：③pydantic-settings v2 默认 extra='forbid'，.env 中 DB_PASS/ADMIN_TOKEN（compose/backup 共享变量、非应用字段）使 `Settings()` 抛 extra_forbidden——本地 pytest 全挂、api 容器启动即崩；改 `SettingsConfigDict(env_file=".env", extra="ignore")`（.env 按部署设计为应用与 compose 共用，应用侧忽略不认识的键）。**依赖约束一处**：④requirements `httpx~=0.27` 允许解析 0.28.x，httpx 0.28 移除 sniffio 而 zhipuai 2.1.5 直接 import sniffio→ModuleNotFoundError（import 期崩溃，镜像 pip 安装不报错、启动才炸）；钉 `httpx~=0.27.0`。**测试五处缺陷**（实现与 docstring 契约/ADR-0004 一致，测试期望/数据错误；历轮审查"数值已手算复核"的结论证明只做纸面推演未实跑，M0 实跑全部现形）：⑤test_fill_timing_contract 的 signal_close 断言 1.1 与契约 shift(1) 自相矛盾（信号 d1→首收益区间 d1→d2=0，净值 1.0）；⑥test_hand_computed_with_fee 手算漏计第二笔费（d4 平仓费：1.0995×0.9995≈1.0990，曲线按 4 位舍入为 1.099）；⑦test_max_drawdown 原数据 next_close 捕获段净额恰为 1（9/12×13/9×12/13），total_return=0——末值 12→14；⑧test_hhv_excludes_today 5 行数据撑不起 exit 的 MA20 窗口（需 21 行）——扩至 25 行；⑨test_chunk_page_attribution 文本 15 字符<20 字符"无文本层"阈值，自触拒绝——加长文本。**实测通过（M0）**：29 项单测全绿（Py3.11 venv）；AKShare 600519 双口径 724 行 10 列；**hfq 重叠窗口实证=一致**（261 重叠日×10 列逐日最大绝对差全 0.0，ADR-0003 已回填）；fixtures ×2 生成+`_load_fixture` 回读校验；Compose 三容器健康（db healthy/api/web up，healthz 直连与经 nginx 均通，无 key 时探针优雅降级 vector_ok=false 不阻止启动）；D2 guarded finish 冲突演练（watchdog 释放 50000→迟到 finish 不覆盖+M_TASK_CONF+1→重启对账 reserved==Σ(pending.reserved)）；D3 并发冒烟（HTTP 面：双任务并行期 healthz 60 次 max 16ms；容器内：两路 to_thread 并发网络 IO 180 请求期间事件循环 max_lag 2.2ms、心跳续租 59 次）；C3 代码级 BM25 查询级降级（bm25_degraded+明示 note+M_RAG_FALLBACK+1+日志留痕）；D4 备份链（pg_dump→tar→TTL→reconcile 零悬空；安全检查：外部 /api/admin 与 /metrics 403、回环 :8000/metrics 200）。**环境发现（非缺陷，留档）**：东财接口从 Docker Desktop(Windows) 容器出网被断连（宿主机正常、容器对 baidu/sina 正常）——生产 Linux 主机部署时需复测，行情缓存/fixture 路径不受影响；Git Bash 无 flock（backup.sh 以等价链人工逐步执行，flock 互斥留服务器首次部署验证）；pandas `read_json(literal str)` FutureWarning（~=2.2 钉版下无功能影响，升级 pandas 3 前需改 StringIO，留档观察）。**新增文件**（FILE-MANIFEST 已声明）：`scripts/m0_akshare_checks.py`/`m0_drill_guarded_finish.py`/`m0_drill_concurrency.py`/`m0_drill_concurrency_http.py`/`m0_drill_bm25_fallback.py`（M0 演练脚本，证据可复现）、fixtures meta sidecar ×2、`frontend/package-lock.json`（锁定依赖，M1 CI 前置）。
@@ -79,6 +80,11 @@ class Settings(BaseSettings):
     embedding_model: str = "embedding-3"
     embedding_model_fallback: str = "embedding-2"
     embedding_dim: int = 1024
+    # v22：embedding 第三层回退——SiliconFlow OpenAI 兼容端点（免费 bge-m3，
+    # 实测 1024 维与 DDL vector(1024) 匹配）；key 为空则该层自动跳过
+    siliconflow_api_key: str = ""
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
+    siliconflow_embedding_model: str = "BAAI/bge-m3"
     tool_result_max_chars: int = 6000
     budget_max_dag_nodes: int = 6
     budget_max_llm_calls: int = 25
@@ -279,6 +285,7 @@ class ChatResult:
 # 探针解析出的实际生效嵌入模型与维度（rag.probe() 设置）
 EMBED_MODEL: str = settings.embedding_model
 EMBED_DIM: int = settings.embedding_dim
+EMBED_PROVIDER: str = "zhipu"   # v22：zhipu | siliconflow（rag.probe() 设置）
 # embed 批次串行（SDK线程安全未承诺）。必须 asyncio.Lock 而非 threading.Lock：
 # 后者的 acquire 是同步调用——跨 await 持锁时，争用方会在事件循环线程上原地
 # 阻塞，持锁方 API 往返期间整个服务（心跳/SSE/请求）停摆（v17 P1-2）。
@@ -341,17 +348,33 @@ class LLMClient:
         return self.client.embeddings.create(
             model=model, input=texts, dimensions=dim)
 
+    def _embed_siliconflow_sync(self, texts, model):
+        # v22：OpenAI 兼容端点 + Bearer 鉴权（zhipuai SDK 的 JWT 签名不适用）
+        import httpx
+        r = httpx.post(
+            f"{settings.siliconflow_base_url}/embeddings",
+            headers={"Authorization":
+                     f"Bearer {settings.siliconflow_api_key}"},
+            json={"model": model, "input": texts}, timeout=60)
+        r.raise_for_status()
+        return r.json()["data"]
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """批量≤64；串行锁；使用探针解析的 (EMBED_MODEL, EMBED_DIM)。"""
+        """批量≤64；串行锁；使用探针解析的 (EMBED_PROVIDER, EMBED_MODEL, EMBED_DIM)。"""
         assert len(texts) <= 64
         global EMBED_MODEL, EMBED_DIM
         out: list[list[float]] = []
         for attempt in range(3):
             try:
                 async with _embed_lock:
-                    resp = await asyncio.to_thread(
-                        self._embed_sync, texts, EMBED_MODEL, EMBED_DIM)
-                out = [list(d.embedding) for d in resp.data]
+                    if EMBED_PROVIDER == "siliconflow":
+                        data = await asyncio.to_thread(
+                            self._embed_siliconflow_sync, texts, EMBED_MODEL)
+                        out = [list(d["embedding"]) for d in data]
+                    else:
+                        resp = await asyncio.to_thread(
+                            self._embed_sync, texts, EMBED_MODEL, EMBED_DIM)
+                        out = [list(d.embedding) for d in resp.data]
                 break
             except asyncio.CancelledError:
                 raise
@@ -1791,23 +1814,32 @@ def _dim_ok(vec) -> bool:
     return len(vec) == llm_mod.EMBED_DIM
 
 async def probe() -> bool:
-    """embedding-3(dimensions) 失败→回退 embedding-2(1024)。
+    """embedding-3(dimensions) 失败→回退 embedding-2(1024)→再回退
+    SiliconFlow bge-m3(1024, OpenAI 兼容, 免费; key 为空跳过该层)。
     维度异常仅标记向量检索不可用，不阻止应用启动。"""
     global VECTOR_OK
     VECTOR_OK = False
-    for model, dim in [(settings.embedding_model, settings.embedding_dim),
-                       (settings.embedding_model_fallback, 1024)]:
+    chain = [("zhipu", settings.embedding_model, settings.embedding_dim),
+             ("zhipu", settings.embedding_model_fallback, 1024)]
+    if settings.siliconflow_api_key:
+        chain.append(("siliconflow",
+                      settings.siliconflow_embedding_model, 1024))
+    for provider, model, dim in chain:
         try:
-            llm_mod.EMBED_MODEL, llm_mod.EMBED_DIM = model, dim
+            llm_mod.EMBED_PROVIDER, llm_mod.EMBED_MODEL, llm_mod.EMBED_DIM = \
+                provider, model, dim
             vecs = await llm_mod.llm().embed(["探针"])
             if vecs and len(vecs[0]) == dim:
                 VECTOR_OK = True
-                log.info("embedding_probe_ok", model=model, dim=dim)
+                log.info("embedding_probe_ok", provider=provider,
+                         model=model, dim=dim)
                 return True
-            log.warning("embedding_probe_dim_mismatch", model=model,
-                        expect=dim, got=len(vecs[0]) if vecs else 0)
+            log.warning("embedding_probe_dim_mismatch", provider=provider,
+                        model=model, expect=dim,
+                        got=len(vecs[0]) if vecs else 0)
         except Exception as e:
-            log.warning("embedding_probe_fail", model=model, err=str(e))
+            log.warning("embedding_probe_fail", provider=provider,
+                        model=model, err=str(e))
     return False
 
 def chunk_pdf(path: str, size: int = 600, overlap: int = 80) -> list[dict]:
@@ -2255,6 +2287,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-
 ### `backend/.env.example`
 ```
 ZHIPU_API_KEY=your_bigmodel_key
+SILICONFLOW_API_KEY=your_siliconflow_key_or_empty
 DB_PASS=change-me-strong-password
 ADMIN_TOKEN=change-me-random-token
 # DATABASE_URL 由 compose 注入（db 主机名=db）；
@@ -3626,6 +3659,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v22：embedding 三层回退链（RAG 向量检索恢复）。SiliconFlow 免费 bge-m3 实测 1024 维匹配 DDL；config 三新字段（key 空则跳层）；llm.embed 按 EMBED_PROVIDER 分发（httpx+Bearer）；probe 链 [zhipu e3→e2→siliconflow]；002_hnsw 启用；.env.example 补占位。验证：宿主+容器探针（vector_ok=true 首次）、向量 drill mode=vector 命中 0.7286、HNSW CREATE INDEX、29 测试绿。C2 工程目的达成（智谱数值待余额补录）；embedding 侧非单厂商（ADR-0005 补注，chat 仍纯 GLM）。
 - v21：免费运行模式加固（M0-记录 §3.6）。P1：chat 重试 3→4 次、退避 1s/2s→2s/4s/8s（吸收免费层 429-1305 过载突发，实测任务曾因此 failed）；免费模式 env 配置（四角色 flash+墙钟 600s）与 GitHub 接入（CI 首跑绿）留痕。
 - v20：M0 端到端补验轮（真实 API key 链路；明细：M0-记录 §3/§5.8）。P0：agent_loop `import registry` 引用不存在对象（首个真实 Agent 节点即 ImportError，静态审查两轮漏检）；P1：Supervisor 无日期锚点，"近三年"解析为 2021-2024；安全：.env 被烤进镜像→新增 .dockerignore；内容钉死：.github/workflows/ci.yml（M1）。实测：C1 双模型 usage/tools=None/流式拼接/工具往返/端到端三跑（末跑全绿 trace_id=4fd2ac796bd7，报告全引用+双口径）/SSE 经 nginx 实证。key 差异：flash 免费稳定、glm-4.6 间歇 1113、embedding 家族持续 1113（C2 阻塞待按量余额）。
 - v19：M0 落仓实测修复轮（明细与失败原文：docs/verification/M0-记录.md）。部署链阻断×2（compose volumes 顶键缩进/Dockerfile CMD 跨行）；运行链 P0×1（pydantic-settings extra_forbidden 拒绝 .env 共享变量）；依赖约束×1（httpx ~=0.27 解析到 0.28 致 zhipuai import 崩溃，钉 0.27.0）；测试缺陷×5（signal_close 断言/费率手算/捕获段净额/窗口行数/文本阈值，全部为测试错、实现与契约一致）。实测通过：29 单测+AKShare 实证（hfq 重叠一致，ADR-0003 回填）+fixtures+Compose+D2/D3/C3/D4 演练。环境留档：容器出网东财被拒/flock 缺失/pandas FutureWarning。新增 M0 演练脚本×5+meta sidecar+package-lock。

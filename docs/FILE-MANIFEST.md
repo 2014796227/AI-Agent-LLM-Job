@@ -98,7 +98,8 @@
 | `evals/cases/backtest.yaml` | Part 8 | 三示例用例 |
 | `evals/fixtures/README.md` | Part 8（v18 钉死内容） | 快照生成契约：完整 10 列双口径帧+meta 三字段（M0 生成） |
 | `evals/fixtures/*.parquet` ×2 + `*.meta.json` ×2 | 新增（M0-B3 生成，脚本 m0_akshare_checks.py） | 冻结快照：600519 两个日期窗；meta=fetched_at/akshare_version/checksum |
-| `migrations/001_init.sql` | Part 1 约定 | =schema.sql 快照；002_hnsw 待 key 实测维度后 |
+| `migrations/001_init.sql` | Part 1 约定 | =schema.sql 快照 |
+| `migrations/002_hnsw.sql` | Part 1 约定（v22 启用） | HNSW 索引；维度依据=1024（bge-m3 实测，M0-记录 §3.7），已应用验证 |
 
 **v19 新增（M0 演练脚本，证据可复现，明细见 docs/verification/M0-记录.md）**
 
@@ -119,6 +120,13 @@
 | `.github/workflows/ci.yml` | M1 CI：ubuntu+Py3.11+pytest / node20+npm ci+tsc -b（蓝图 Part 6 v20 钉死，待 GitHub push 后首跑） |
 | `scripts/m0_llm_checks.py` | §3 GLM/embedding 实测（逐项容错，quota 差异记录） |
 | `scripts/m0_e2e_task.py` | 端到端真实任务驱动：POST /api/chat→SSE 经 nginx→终态报告断言 |
+
+**v22 新增（embedding 三层回退链）**
+
+| 文件 | 用途 |
+|---|---|
+| `scripts/m0_drill_vector.py` | 向量检索 drill：bge-m3 真实嵌入入库→近邻命中→HNSW 验证（api 容器内） |
+| `migrations/002_hnsw.sql` | 见上表（从"待定"转为已启用） |
 
 ## 七、审查建议顺序
 

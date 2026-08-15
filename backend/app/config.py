@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     embedding_model: str = "embedding-3"
     embedding_model_fallback: str = "embedding-2"
     embedding_dim: int = 1024
+    # v22：embedding 第三层回退——SiliconFlow OpenAI 兼容端点（免费 bge-m3，
+    # 实测 1024 维与 DDL vector(1024) 匹配）；key 为空则该层自动跳过
+    siliconflow_api_key: str = ""
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
+    siliconflow_embedding_model: str = "BAAI/bge-m3"
     tool_result_max_chars: int = 6000
     budget_max_dag_nodes: int = 6
     budget_max_llm_calls: int = 25

@@ -1,6 +1,7 @@
 # ADR-0005：PostgreSQL + pgvector 存储与知识库设计
 
-- 状态：已接受（HNSW 索引待 M0 实测维度后启用；M0 实测备注：当前 key 的 embedding-3/embedding-2 均报 1113 余额不足——维度实测与 embedding-2 带 dimensions 行为观察待按量付费余额后补，M0-记录 §3）
+- 状态：已接受（HNSW 已于 M0 后启用：维度实测=1024，依据 BAAI/bge-m3 @ SiliconFlow，2026-08-15，migrations/002_hnsw.sql；M0 实测备注：智谱 key 的 embedding-3/embedding-2 报 1113 余额不足，维度实测与 embedding-2 带 dimensions 行为观察待按量余额后补——向量链路可用性已由 bge-m3 等价验证，M0-记录 §3.7）
+- 补注（2026-08-15，蓝图 v22）：embedding 探针链扩为三层（智谱 e3→智谱 e2→SiliconFlow bge-m3，后者 OpenAI 兼容、免费、1024 维）——embedding 侧自此非单厂商；维度治理不变（探针双侧断言、整批校验、DDL vector(1024)）；LLM chat 仍纯 GLM（ADR-002 不受影响）
 - 日期：2026-08-15
 - 决策人：＿＿＿＿（待签名）
 - 关联：蓝图 schema.sql / rag.py；第三轮评审（维度上限问题）；PRD【待你确认】2
