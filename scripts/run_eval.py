@@ -155,13 +155,32 @@ def _subset(want, got):
         return w == g
     return sub(want, got)
 
-async def _run_all(cases_dir: str, timeout_min: int):
+async def _run_all(cases_dir: str, timeout_min: int, checkpoint: str = ""):
     from app.db import init_schema
     await init_schema()
-    out = []
-    for f in sorted(Path(cases_dir).glob("*.yaml")):
-        for case in yaml.safe_load_all(f.read_text(encoding="utf-8")):
-            out.append(await run_case(case, timeout_min))
+    out, done = [], set()
+    if checkpoint and Path(checkpoint).exists():
+        for line in Path(checkpoint).read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                r = json.loads(line)
+                out.append(r)
+                done.add(r["case"])
+        print(f"resume: {len(done)} 个用例已存，跳过", flush=True)
+    files = sorted(Path(cases_dir).glob("*.yaml"))
+    cases = [c for f in files
+             for c in yaml.safe_load_all(f.read_text(encoding="utf-8"))]
+    n = len(out)
+    for case in cases:
+        if case["id"] in done:
+            continue
+        r = await run_case(case, timeout_min)
+        out.append(r)
+        n += 1
+        if checkpoint:   # v29：逐用例 checkpoint——评测进程被环境杀掉后可断点续跑
+            with open(checkpoint, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"[{n}/{len(cases)}] {case['id']} -> {r['status']}",
+              flush=True)
     return out
 
 def main():
@@ -169,8 +188,10 @@ def main():
     ap.add_argument("--cases", default="evals/cases")
     ap.add_argument("--out", default="docs/eval/results.md")
     ap.add_argument("--timeout-min", type=int, default=10)
+    ap.add_argument("--checkpoint", default="",
+                    help="逐用例结果 jsonl；存在则跳过已存用例（v29 断点续跑）")
     a = ap.parse_args()
-    results = asyncio.run(_run_all(a.cases, a.timeout_min))
+    results = asyncio.run(_run_all(a.cases, a.timeout_min, a.checkpoint))
     md = ["# 评测报告（脚本生成，人工结论只允许追加于末尾）", "",
           f"- commit: `{commit_hash()}`",
           f"- 时间: {dt.datetime.now().isoformat()}", "",

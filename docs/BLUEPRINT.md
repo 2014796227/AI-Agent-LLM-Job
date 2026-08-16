@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v28 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v29 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v29（2026-08-16）：**run_eval 断点续跑（M5 轮②）**。全量评测在生产容器内两次于 ~2.5h 处被静默终止（容器无重启/无 OOM/无 traceback——判定为 exec 通道生命周期的环境行为，非应用缺陷）；改造：`--checkpoint <jsonl>` 逐用例追加结果+flush，启动时载入并跳过已存用例，逐用例打印 `[n/total] id -> status` 进度；环境侧以 `sh -c 'cd ... && exec python -u ... >> log 2>&1'` 启动（日志落盘，进程直系）。评测中断损失从"全部重来"降为"补跑缺集"。
 > - v28（2026-08-16）：**M5 评测轮①：评测集候选 45 条 + must_cite 断言**。`run_eval.py` 新增 RAG 用例断言 `must_cite:[doc_id...]`（报告须含 [[doc#页]] 引用命中指定文档）+ 结果表第 8 列 cite。评测集候选（`evals/cases/{backtest,report,rag,refuse}.yaml`，**AI 生成待用户删改定稿** per 评测说明）：回测 12（双均线三组/EMA/RSI/动量/突破两组/量价组合/跨窗口/拒绝 3）/ 报告 8（走势/波动/月度/风险/区间极值/知识混合/复合任务）/ RAG 20（方法论 12 + 茅台 2025/2024、五粮液 2025 财务 8，全部 must_cite）/ 正确拒绝 5（套利/高频/杠杆/机器学习/加密货币）。运行口径：run_eval 走 task_repo.create（不占日预算预留，v16 已声明）；容器内 detached 执行规避 SSH 会话时长限制。M4 收口同轮：方法论 120 条经用户审核**全部通过**（生产库 title 标注），M4-验收报告结论通过。
 > - v27（2026-08-16）：**Supervisor 拒绝边界澄清（M4 轮③）**。v26 复验时 flash 将"查茅台营收+回测方法论"的知识问答任务**误判为超出策略白名单而 refuse**（task_refused）——拒绝话术只描述策略白名单，且 flash 非确定性下同题首跑未拒。supervisor 规则 5：白名单只约束"回测策略族"，仅当用户要求回测/交易策略且类型超白名单才 refuse；行情分析、公司财务/年报数据、知识库与方法论问答等研究类需求正常规划 research/writer。
 > - v26（2026-08-16）：**M4 知识库轮②：两处实测修复**。**P1**：`doc_page` 渲染自 v17 起从未工作——`Pixmap.save` 按**文件扩展名**推断格式，v17 P3-5 的 `cache+".tmp"` 后缀直接 `ValueError: Image format tmp`（引用点开原页恒 500；单测不覆盖渲染路径，静态审查两轮未捕获）；改 `.tmp.png` 后缀，原子性不变。**P2**：research 提示词补工具选择指引——实测"茅台2025营收"问题被路由到行情接口（东财封禁下失败、诚实降级）而未检索知识库（年报语料 0.776 命中在库）；新增规则 5：财务数据/方法论类问题用 rag.search，"根据知识库回答"类禁止行情工具。同轮环境留档：东财对家宽 IP 的再封禁阈值极低（解封后累计数次请求即复发）——000858 缓存补灌放弃，M5 定期预热方案需按"极低频+长间隔"设计。
@@ -3221,13 +3222,32 @@ def _subset(want, got):
         return w == g
     return sub(want, got)
 
-async def _run_all(cases_dir: str, timeout_min: int):
+async def _run_all(cases_dir: str, timeout_min: int, checkpoint: str = ""):
     from app.db import init_schema
     await init_schema()
-    out = []
-    for f in sorted(Path(cases_dir).glob("*.yaml")):
-        for case in yaml.safe_load_all(f.read_text(encoding="utf-8")):
-            out.append(await run_case(case, timeout_min))
+    out, done = [], set()
+    if checkpoint and Path(checkpoint).exists():
+        for line in Path(checkpoint).read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                r = json.loads(line)
+                out.append(r)
+                done.add(r["case"])
+        print(f"resume: {len(done)} 个用例已存，跳过", flush=True)
+    files = sorted(Path(cases_dir).glob("*.yaml"))
+    cases = [c for f in files
+             for c in yaml.safe_load_all(f.read_text(encoding="utf-8"))]
+    n = len(out)
+    for case in cases:
+        if case["id"] in done:
+            continue
+        r = await run_case(case, timeout_min)
+        out.append(r)
+        n += 1
+        if checkpoint:   # v29：逐用例 checkpoint——评测进程被环境杀掉后可断点续跑
+            with open(checkpoint, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"[{n}/{len(cases)}] {case['id']} -> {r['status']}",
+              flush=True)
     return out
 
 def main():
@@ -3235,8 +3255,10 @@ def main():
     ap.add_argument("--cases", default="evals/cases")
     ap.add_argument("--out", default="docs/eval/results.md")
     ap.add_argument("--timeout-min", type=int, default=10)
+    ap.add_argument("--checkpoint", default="",
+                    help="逐用例结果 jsonl；存在则跳过已存用例（v29 断点续跑）")
     a = ap.parse_args()
-    results = asyncio.run(_run_all(a.cases, a.timeout_min))
+    results = asyncio.run(_run_all(a.cases, a.timeout_min, a.checkpoint))
     md = ["# 评测报告（脚本生成，人工结论只允许追加于末尾）", "",
           f"- commit: `{commit_hash()}`",
           f"- 时间: {dt.datetime.now().isoformat()}", "",
@@ -3784,6 +3806,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v29：run_eval 断点续跑（--checkpoint jsonl + 进度输出）——评测进程两次 ~2.5h 被环境静默终止后的根治性缓解。
 - v28：M5 评测轮①——must_cite 断言+结果表 cite 列；评测候选 45 条（回测12/报告8/RAG20/拒绝5，待用户定稿）；M4 收口（方法论 120 条审核通过）。
 - v27：Supervisor 拒绝边界澄清——白名单只约束回测策略族，研究/知识问答类不得误拒（flash 曾把财务问答判超白名单）。
 - v26：M4 轮②——doc_page 的 .tmp 后缀致 PyMuPDF 格式推断失败（引用点开恒 500，自 v17 从未工作）改 .tmp.png；research 提示词补工具选择指引（财务/方法论→rag.search）；东财再封禁阈值极低留档。
