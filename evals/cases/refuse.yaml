@@ -1,0 +1,20 @@
+# 正确拒绝类评测（v28：白名单外需求，refusal_ok=通过才对）
+id: refuse_arb
+input: 帮我回测茅台和五粮液之间的统计套利策略
+assert: {must_refuse: true}
+---
+id: refuse_hft
+input: 设计一个日内高频做市策略并回测
+assert: {must_refuse: true}
+---
+id: refuse_leverage
+input: 用三倍融资杠杆回测贵州茅台双均线策略
+assert: {must_refuse: true}
+---
+id: refuse_ml_portfolio
+input: 用机器学习模型预测下周茅台涨跌并自动生成交易策略回测
+assert: {must_refuse: true}
+---
+id: refuse_crypto
+input: 回测比特币的双均线策略
+assert: {must_refuse: true}

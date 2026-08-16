@@ -1,3 +1,4 @@
+# 回测类评测（v28：M5 候选集，AI 生成待用户删改定稿；fixture=600519 冻结快照）
 id: backtest_001
 input: 对贵州茅台用20日均线上穿60日均线买入、下穿卖出，回测2023-06-01至2026-05-31
 symbol: "600519"
@@ -13,6 +14,40 @@ assert:
   backtest_recompute: {fill: next_close, tolerance: 1e-9}
 judge: {rubric: "报告数字须与工具返回一致，检查幻觉"}
 ---
+id: bt_ma_fast
+input: 贵州茅台5日均线上穿20日均线买入、下穿卖出，回测2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["engine.run_backtest"]
+  strategy_spec_match:
+    entry: {op: cross_up, left: {kind: ind, ind: ma, n: 5},
+            right: {kind: ind, ind: ma, n: 20}}
+  backtest_recompute: {fill: next_close, tolerance: 1e-9}
+---
+id: bt_ma_mid
+input: 贵州茅台10日均线金叉30日均线买入、死叉卖出，区间2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  strategy_spec_match:
+    entry: {op: cross_up, left: {kind: ind, ind: ma, n: 10},
+            right: {kind: ind, ind: ma, n: 30}}
+  backtest_recompute: {fill: next_close, tolerance: 1e-9}
+---
+id: bt_ema
+input: 贵州茅台12日EMA上穿26日EMA买入、下穿卖出，回测2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  strategy_spec_match:
+    entry: {op: cross_up, left: {kind: ind, ind: ema, n: 12},
+            right: {kind: ind, ind: ema, n: 26}}
+  backtest_recompute: {fill: next_close}
+---
 id: breakout_001
 input: 贵州茅台收盘价上穿前20日最高买入、跌破前20日最低卖出，2024-01-01至2026-05-31
 symbol: "600519"
@@ -25,6 +60,71 @@ assert:
     exit:  {op: cross_down, left: {kind: price, src: close},
             right: {kind: ind, ind: llv, n: 20}}
 ---
+id: bt_rsi_obos
+input: 贵州茅台RSI(14)低于30时买入、高于70时卖出，回测2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  strategy_spec_match:
+    entry: {op: lt, left: {kind: ind, ind: rsi, n: 14},
+            right: {kind: const, value: 30}}
+    exit:  {op: gt, left: {kind: ind, ind: rsi, n: 14},
+            right: {kind: const, value: 70}}
+  backtest_recompute: {fill: next_close}
+---
+id: bt_momentum
+input: 贵州茅台20日涨幅为正时持有、转负时卖出，回测2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  strategy_spec_match:
+    entry: {op: gt, left: {kind: ind, ind: ret, n: 20},
+            right: {kind: const, value: 0}}
+    exit:  {op: lt, left: {kind: ind, ind: ret, n: 20},
+            right: {kind: const, value: 0}}
+---
+id: bt_vol_combined
+input: 贵州茅台5日均线上穿20日均线且5日均量大于20日均量时买入，均线死叉卖出，回测2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["engine.run_backtest"]
+  backtest_recompute: {fill: next_close}
+---
+id: bt_2024_window
+input: 贵州茅台20日均线金叉60日均线买入、死叉卖出，只回测2024-01-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20240101_20260531.parquet"
+assert:
+  strategy_spec_match:
+    entry: {op: cross_up, left: {kind: ind, ind: ma, n: 20},
+            right: {kind: ind, ind: ma, n: 60}}
+  backtest_recompute: {fill: next_close}
+---
+id: bt_highvol_breakout
+input: 贵州茅台收盘价上穿前60日最高价买入、跌破前10日最低价卖出，回测2023-06-01至2026-05-31
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  strategy_spec_match:
+    entry: {op: cross_up, left: {kind: price, src: close},
+            right: {kind: ind, ind: hhv, n: 60}}
+    exit:  {op: cross_down, left: {kind: price, src: close},
+            right: {kind: ind, ind: llv, n: 10}}
+---
 id: strategy_reject_001
 input: 帮我用LSTM预测茅台股价并回测
+assert: {must_refuse: true}
+---
+id: bt_reject_grid
+input: 用网格交易策略回测贵州茅台
+assert: {must_refuse: true}
+---
+id: bt_reject_multi
+input: 同时回测贵州茅台和五粮液的双均线策略
 assert: {must_refuse: true}

@@ -115,6 +115,10 @@ async def run_case(case: dict, timeout_min: int) -> dict:
     refusal_ok = (any(e["type"] == "task_refused" for e in trace)
                   if case.get("assert", {}).get("must_refuse")
                   else None)
+    # v28（M5）：RAG 用例的引用断言——报告须含 [[指定doc#页]] 形式引用
+    cite_need = case.get("assert", {}).get("must_cite", [])
+    cite_ok = (any(f"[[{d}#" in _find_report(t) for d in cite_need)
+               if cite_need else None)
 
     judge = {"pass": None}
     report = _find_report(t)
@@ -134,7 +138,7 @@ async def run_case(case: dict, timeout_min: int) -> dict:
     return {"case": case["id"], "status": t["status"],
             "tools_ok": tools_ok, "spec_ok": spec_ok,
             "backtest_ok": backtest_ok, "numbers_ok": numbers_ok,
-            "refusal_ok": refusal_ok, "judge": judge}
+            "refusal_ok": refusal_ok, "cite_ok": cite_ok, "judge": judge}
 
 def _subset(want, got):
     if not want:
@@ -170,13 +174,13 @@ def main():
     md = ["# 评测报告（脚本生成，人工结论只允许追加于末尾）", "",
           f"- commit: `{commit_hash()}`",
           f"- 时间: {dt.datetime.now().isoformat()}", "",
-          "| 用例 | 状态 | tools | spec | backtest | numbers | refusal | judge |",
-          "|---|---|---|---|---|---|---|---|"]
+          "| 用例 | 状态 | tools | spec | backtest | numbers | refusal | cite | judge |",
+          "|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         md.append(
             f"| {r['case']} | {r['status']} | {r['tools_ok']} "
             f"| {r['spec_ok']} | {r['backtest_ok']} | {r['numbers_ok']} "
-            f"| {r['refusal_ok']} | {r['judge'].get('pass')} |")
+            f"| {r['refusal_ok']} | {r['cite_ok']} | {r['judge'].get('pass')} |")
     Path(a.out).write_text("\n".join(md) + "\n", encoding="utf-8")
     print(f"written {a.out}")
 

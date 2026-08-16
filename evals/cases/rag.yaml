@@ -1,0 +1,83 @@
+# RAG 知识问答类评测（v28：M5 候选集；must_cite 断言引用须命中指定文档）
+# doc_299cef2a36=量化方法论策展库（120条一页一条，条目序号=页码）
+# doc_828214a144=贵州茅台2025年报节选  doc_d83c1ca78f=五粮液2025年报节选
+id: rag_drawdown_ctl
+input: 根据知识库回答：量化回测中如何控制最大回撤？须引用原文页码
+assert: {tools_called: ["rag.search"], must_cite: ["doc_299cef2a36"]}
+judge: {rubric: "答案须与所引原文一致，引用格式 [[doc_id#页码]] 保留"}
+---
+id: rag_kelly
+input: 根据知识库回答：凯利公式在实盘中怎么用？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_lookahead
+input: 根据知识库回答：什么是前视偏差，如何避免？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_survivorship
+input: 根据知识库回答：什么是幸存者偏差？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_overfit
+input: 根据知识库回答：如何判断一个回测策略过拟合了？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_sharpe
+input: 根据知识库回答：夏普比率有什么局限？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_voltarget
+input: 根据知识库回答：什么是波动率目标仓位？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_atr
+input: 根据知识库回答：ATR 止损怎么做？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_ttest
+input: 根据知识库回答：策略收益的 t 检验怎么看？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_walkforward
+input: 根据知识库回答：什么是前推（Walk-forward）检验？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_adjust
+input: 根据知识库回答：回测应该用前复权还是后复权，为什么？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_t1
+input: 根据知识库回答：A股 T+1 制度对回测成交假设有什么影响？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}
+---
+id: rag_mt_revenue
+input: 根据知识库回答：贵州茅台2025年合并口径营业收入约多少？须引用原文页码
+assert: {must_cite: ["doc_828214a144"]}
+---
+id: rag_mt_netprofit
+input: 根据知识库回答：贵州茅台2025年归属于母公司股东的净利润约多少？须引用原文页码
+assert: {must_cite: ["doc_828214a144"]}
+---
+id: rag_mt_cashflow
+input: 根据知识库回答：贵州茅台2025年经营活动现金流量情况如何？须引用原文页码
+assert: {must_cite: ["doc_828214a144"]}
+---
+id: rag_mt_product
+input: 根据知识库回答：贵州茅台2025年分产品的营业收入构成是怎样的？须引用原文页码
+assert: {must_cite: ["doc_828214a144"]}
+---
+id: rag_mt_2024_rev
+input: 根据知识库回答：贵州茅台2024年营业收入约多少？须引用原文页码
+assert: {must_cite: ["doc_74469fe158"]}
+---
+id: rag_wly_revenue
+input: 根据知识库回答：五粮液2025年营业收入约多少？须引用原文页码
+assert: {must_cite: ["doc_d83c1ca78f"]}
+---
+id: rag_wly_profit
+input: 根据知识库回答：五粮液2025年净利润情况如何？须引用原文页码
+assert: {must_cite: ["doc_d83c1ca78f"]}
+---
+id: rag_kb_boundary
+input: 知识库里关于回测报告应该披露哪些内容？须引用原文页码
+assert: {must_cite: ["doc_299cef2a36"]}

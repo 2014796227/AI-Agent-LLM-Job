@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v27 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v28 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v28（2026-08-16）：**M5 评测轮①：评测集候选 45 条 + must_cite 断言**。`run_eval.py` 新增 RAG 用例断言 `must_cite:[doc_id...]`（报告须含 [[doc#页]] 引用命中指定文档）+ 结果表第 8 列 cite。评测集候选（`evals/cases/{backtest,report,rag,refuse}.yaml`，**AI 生成待用户删改定稿** per 评测说明）：回测 12（双均线三组/EMA/RSI/动量/突破两组/量价组合/跨窗口/拒绝 3）/ 报告 8（走势/波动/月度/风险/区间极值/知识混合/复合任务）/ RAG 20（方法论 12 + 茅台 2025/2024、五粮液 2025 财务 8，全部 must_cite）/ 正确拒绝 5（套利/高频/杠杆/机器学习/加密货币）。运行口径：run_eval 走 task_repo.create（不占日预算预留，v16 已声明）；容器内 detached 执行规避 SSH 会话时长限制。M4 收口同轮：方法论 120 条经用户审核**全部通过**（生产库 title 标注），M4-验收报告结论通过。
 > - v27（2026-08-16）：**Supervisor 拒绝边界澄清（M4 轮③）**。v26 复验时 flash 将"查茅台营收+回测方法论"的知识问答任务**误判为超出策略白名单而 refuse**（task_refused）——拒绝话术只描述策略白名单，且 flash 非确定性下同题首跑未拒。supervisor 规则 5：白名单只约束"回测策略族"，仅当用户要求回测/交易策略且类型超白名单才 refuse；行情分析、公司财务/年报数据、知识库与方法论问答等研究类需求正常规划 research/writer。
 > - v26（2026-08-16）：**M4 知识库轮②：两处实测修复**。**P1**：`doc_page` 渲染自 v17 起从未工作——`Pixmap.save` 按**文件扩展名**推断格式，v17 P3-5 的 `cache+".tmp"` 后缀直接 `ValueError: Image format tmp`（引用点开原页恒 500；单测不覆盖渲染路径，静态审查两轮未捕获）；改 `.tmp.png` 后缀，原子性不变。**P2**：research 提示词补工具选择指引——实测"茅台2025营收"问题被路由到行情接口（东财封禁下失败、诚实降级）而未检索知识库（年报语料 0.776 命中在库）；新增规则 5：财务数据/方法论类问题用 rag.search，"根据知识库回答"类禁止行情工具。同轮环境留档：东财对家宽 IP 的再封禁阈值极低（解封后累计数次请求即复发）——000858 缓存补灌放弃，M5 定期预热方案需按"极低频+长间隔"设计。
 > - v25（2026-08-15）：**M4 知识库轮①：引用可点击 + 首批语料**。前端 ChatBox 把报告中 `[[doc_id#页码]]` 引用转为可点击链接（marked 前正则替换为 `[📄原文第N页](/api/docs/{doc}/page/{N})`，DOMPurify afterSanitizeAttributes 钩子对 /api/docs/ 链接加 target=_blank+noopener）——**PRD 场景 C『引用点开渲染原 PDF 页』闭环**。语料（`scripts/m4_prepare_corpus.py` 制备，PRD 确认范围）：①巨潮官方年报节选×3（茅台 2025/2024、五粮液 2025；按『公司简介+财务指标+MD&A+三张合并报表』标记摘页 31/31/32 页，garbage=4+deflate 压缩 36MB→2MB，source_type=official 带 cninfo 原始 URL）；②量化方法论策展库 v1 **120 条**（AI 初稿·一条一页——页级引用即条目级；source_type=curated，**待用户逐条审核后定稿**，条目正文在脚本内可审）。本地验证：bge-m3 向量检索精准命中（"如何控制回撤"→回撤控制线 p73 0.652；"茅台2025营业收入"→营收分类/利润表页 0.776）；ingest 全链路（probe→chunk→embed→事务入库）official/curated 双类型实证。
@@ -3180,6 +3181,10 @@ async def run_case(case: dict, timeout_min: int) -> dict:
     refusal_ok = (any(e["type"] == "task_refused" for e in trace)
                   if case.get("assert", {}).get("must_refuse")
                   else None)
+    # v28（M5）：RAG 用例的引用断言——报告须含 [[指定doc#页]] 形式引用
+    cite_need = case.get("assert", {}).get("must_cite", [])
+    cite_ok = (any(f"[[{d}#" in _find_report(t) for d in cite_need)
+               if cite_need else None)
 
     judge = {"pass": None}
     report = _find_report(t)
@@ -3199,7 +3204,7 @@ async def run_case(case: dict, timeout_min: int) -> dict:
     return {"case": case["id"], "status": t["status"],
             "tools_ok": tools_ok, "spec_ok": spec_ok,
             "backtest_ok": backtest_ok, "numbers_ok": numbers_ok,
-            "refusal_ok": refusal_ok, "judge": judge}
+            "refusal_ok": refusal_ok, "cite_ok": cite_ok, "judge": judge}
 
 def _subset(want, got):
     if not want:
@@ -3235,13 +3240,13 @@ def main():
     md = ["# 评测报告（脚本生成，人工结论只允许追加于末尾）", "",
           f"- commit: `{commit_hash()}`",
           f"- 时间: {dt.datetime.now().isoformat()}", "",
-          "| 用例 | 状态 | tools | spec | backtest | numbers | refusal | judge |",
-          "|---|---|---|---|---|---|---|---|"]
+          "| 用例 | 状态 | tools | spec | backtest | numbers | refusal | cite | judge |",
+          "|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         md.append(
             f"| {r['case']} | {r['status']} | {r['tools_ok']} "
             f"| {r['spec_ok']} | {r['backtest_ok']} | {r['numbers_ok']} "
-            f"| {r['refusal_ok']} | {r['judge'].get('pass')} |")
+            f"| {r['refusal_ok']} | {r['cite_ok']} | {r['judge'].get('pass')} |")
     Path(a.out).write_text("\n".join(md) + "\n", encoding="utf-8")
     print(f"written {a.out}")
 
@@ -3779,6 +3784,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v28：M5 评测轮①——must_cite 断言+结果表 cite 列；评测候选 45 条（回测12/报告8/RAG20/拒绝5，待用户定稿）；M4 收口（方法论 120 条审核通过）。
 - v27：Supervisor 拒绝边界澄清——白名单只约束回测策略族，研究/知识问答类不得误拒（flash 曾把财务问答判超白名单）。
 - v26：M4 轮②——doc_page 的 .tmp 后缀致 PyMuPDF 格式推断失败（引用点开恒 500，自 v17 从未工作）改 .tmp.png；research 提示词补工具选择指引（财务/方法论→rag.search）；东财再封禁阈值极低留档。
 - v25：M4 知识库轮①——引用 [[doc_id#页码]] 前端可点击（点开原 PDF 页，场景 C 闭环）；首批语料（年报节选×3 官方+方法论 120 条 AI 初稿待审核）；向量检索/ingest 双类型实证。

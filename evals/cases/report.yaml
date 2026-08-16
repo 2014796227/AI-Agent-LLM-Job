@@ -1,0 +1,67 @@
+# 投研报告类评测（v28：M5 候选集；行情走 fixture 窗口，东财海外限流下确定性）
+id: rpt_trend_2023
+input: 分析贵州茅台2023-06-01至2026-05-31的走势与波动特征
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["market.price_history"]
+judge: {rubric: "报告须含区间涨跌/波动/回撤等真实统计且与工具摘要一致，不得编造数字"}
+---
+id: rpt_trend_2024
+input: 分析贵州茅台2024-01-01至2026-05-31的走势特征
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20240101_20260531.parquet"
+assert:
+  tools_called: ["market.price_history"]
+---
+id: rpt_vol
+input: 贵州茅台近三年波动大吗？分析其波动特征与最大回撤（2023-06-01至2026-05-31）
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["market.price_history"]
+---
+id: rpt_monthly
+input: 按月梳理贵州茅台2023-06-01至2026-05-31的价格表现
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["market.price_history"]
+---
+id: rpt_risk
+input: 评估持有贵州茅台2023-06-01至2026-05-31的风险收益特征
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["market.price_history"]
+---
+id: rpt_range_high_low
+input: 贵州茅台2023-06-01至2026-05-31的区间最高价、最低价与最新收盘价是多少
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["market.price_history"]
+---
+id: rpt_kb_mix
+input: 结合知识库中的回撤控制方法论，评估贵州茅台2023-06-01至2026-05-31持仓的回撤风险
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20230601_20260531.parquet"
+assert:
+  tools_called: ["market.price_history"]
+  must_cite: ["doc_299cef2a36"]
+judge: {rubric: "行情数字来自工具返回；方法论论断须带 [[doc_id#页码]] 引用"}
+---
+id: rpt_two_question
+input: 先分析贵州茅台2024-01-01至2026-05-31走势，再说明该区间适合何种白名单策略并回测
+symbol: "600519"
+fixture:
+  price: "evals/fixtures/600519_hfq_20240101_20260531.parquet"
+assert:
+  tools_called: ["market.price_history", "engine.run_backtest"]
