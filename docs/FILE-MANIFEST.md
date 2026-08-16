@@ -137,6 +137,12 @@
 | `scripts/m0_seed_cache.py` | 线上行情缓存预灌（东财海外 IP 限流兜底，diskcache API 从 fixture 灌入） |
 | `docs/acceptance/M2-验收报告.md` | M2 上线验收留痕 |
 
+**M4 知识库轮新增（2026-08-15）**
+
+| 文件 | 用途 |
+|---|---|
+| `scripts/m4_prepare_corpus.py` | 语料制备：年报按章节标记摘页节选（含 garbage 压缩）+ 方法论 120 条 AI 初稿 PDF 生成（条目正文内嵌可审） |
+
 ## 七、审查建议顺序
 
 1. `docs/FILE-MANIFEST.md`（本文件）→ 2. `README.md` → 3. `docs/PRD.md`（含待拍板项）→ 4. `docs/provenance.md` → 5. ADR 0001~0008 → 6. 后端按 db/schema → llm → budget → events → agents → agent_loop → tasks → orchestrator → market → artifacts → dsl → backtest → tools → rag → ratelimit → main → 7. agents/*.yaml → 8. tests/ → 9. 部署四件套 + scripts → 10. 前端 → 11. `docs/verification/M0-记录.md`（已含真实环境数据）+ `docs/acceptance/M0-验收清单.md`

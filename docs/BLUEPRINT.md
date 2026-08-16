@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v24 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v25 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v25（2026-08-15）：**M4 知识库轮①：引用可点击 + 首批语料**。前端 ChatBox 把报告中 `[[doc_id#页码]]` 引用转为可点击链接（marked 前正则替换为 `[📄原文第N页](/api/docs/{doc}/page/{N})`，DOMPurify afterSanitizeAttributes 钩子对 /api/docs/ 链接加 target=_blank+noopener）——**PRD 场景 C『引用点开渲染原 PDF 页』闭环**。语料（`scripts/m4_prepare_corpus.py` 制备，PRD 确认范围）：①巨潮官方年报节选×3（茅台 2025/2024、五粮液 2025；按『公司简介+财务指标+MD&A+三张合并报表』标记摘页 31/31/32 页，garbage=4+deflate 压缩 36MB→2MB，source_type=official 带 cninfo 原始 URL）；②量化方法论策展库 v1 **120 条**（AI 初稿·一条一页——页级引用即条目级；source_type=curated，**待用户逐条审核后定稿**，条目正文在脚本内可审）。本地验证：bge-m3 向量检索精准命中（"如何控制回撤"→回撤控制线 p73 0.652；"茅台2025营业收入"→营收分类/利润表页 0.776）；ingest 全链路（probe→chunk→embed→事务入库）official/curated 双类型实证。
 > - v24（2026-08-15）：**空报告防御 + 时间线可读性（用户线上反馈）**。用户线上任务（done）report 为空——根因：东财 IP 封禁持续（该窗口不在缓存）→ research 无数据 → writer 在 critic 连续 2 轮 revise 压力下最终输出**空 content**，代码无防御→`_report=""` 静默入库。**修复**：①`_execute` 修订输出为空时保留原稿（`if rw.text.strip()`）；②循环后 writer 全程空输出时以各节点结论黑板拼一份**明示降级**的报告（事实仍全出自上游输出，不引入新数字）+ warning 日志——空报告在机制上不再可能；③Timeline 增强：tool_call 带 symbol/query 参数摘要、tool_result 带 ✓/✗+耗时、critic_verdict 带首轮意见、plan_created 带节点数、task_refused/budget_degraded 带原因（回应用户"能补上让人看得懂的数据吗"）。东财封禁 2h+ 未冷却（留档：演示窗口依赖缓存预灌，M5 评估定时预热）。
 > - v23（2026-08-15）：**strategy_spec 工具 Schema 补全（M2 线上实测发现）**。线上端到端（免费 flash 模式）中 `engine.run_backtest` 连续 4 次翻译失败——根因是工具 schema 里 strategy_spec 仅为无结构 `{"type":"object"}`，模型只能按提示词散文猜格式（错误形态：conditions 包裹层/`args:[l,r]` 代 left-right/操作数 kind 误写指标名）。**修复**：①tools.py 为 strategy_spec 生成精确 JSON Schema（kind/op 枚举、left/right 结构、universe 单标的、嵌套≤3 以展开式 anyOf 表达——规避部分网关 $ref 兼容差异、additionalProperties=False 对齐 extra=forbid）；②strategy.yaml 提示词补精确格式示例（字段名必须完全一致、条件不再包层）。同轮 M2 部署发现留痕：**东财对海外 IP 累计限流**（首拉成功→任务突发 8 请求后该 IP 任意窗口 RemoteDisconnected，与窗口大小无关；ADR-0003 无 SLA 风险的真实实例）→marketcache 预灌 demo 窗口兜底（scripts/m0_seed_cache.py）；部署器 SFTP"间歇失败"实为 **Git Bash MSYS 路径转换**改写远端路径参数（`MSYS_NO_PATHCONV=1` 修复+exec/base64 push 兜底，scripts/deploy_ssh.py；初判"安全层节流"为误诊已更正）。
 > - v22（2026-08-15）：**embedding 三层回退链（RAG 向量检索恢复）**。用户提供 SiliconFlow key（免费层）；实测 `BAAI/bge-m3` 经 OpenAI 兼容端点返回 **1024 维**——与 DDL `vector(1024)` 精确匹配，RAG 向量检索恢复（此前该 key 的智谱 embedding-3/-2 持续 1113、BM25 降级运行）。**实现**：config 增 `siliconflow_api_key/base_url/embedding_model`（key 为空自动跳过该层）；`llm.py` 增 `EMBED_PROVIDER` 全局 + `_embed_siliconflow_sync`（httpx + Bearer；zhipuai SDK 的 JWT 签名不适用第三方），`embed()` 按 provider 分发（asyncio.Lock 串行语义不变）；`rag.probe()` 链扩为 [zhipu e3 → zhipu e2 → siliconflow bge-m3]，探针日志带 provider。**配套**：`migrations/002_hnsw.sql` 启用（维度实测依据=1024）；`.env.example` 增 SILICONFLOW_API_KEY 占位。**边界声明**：embedding 侧自此非单厂商（LLM chat 仍纯 GLM——ADR-002 不变；ADR-0005 补注多厂商 embedding 治理）；智谱侧维度实测仍待按量余额（回填后 DDL 不变）。
@@ -2853,6 +2854,22 @@ import { useTaskStream } from "../lib/useTaskStream";
 import Timeline from "./Timeline";
 import EquityChart from "./EquityChart";
 
+// v25（M4）：报告中的 [[doc_id#页码]] 引用转为可点击链接，新标签页打开
+// 服务端渲染的原 PDF 页图片（GET /api/docs/{doc_id}/page/{page}）。
+const CITE_RE = /\[\[(doc_[A-Za-z0-9]+)#(\d+)\]\]/g;
+function linkifyCitations(md: string): string {
+  return md.replace(CITE_RE, (_m, doc: string, page: string) =>
+    `[📄原文第${page}页](/api/docs/${doc}/page/${page})`);
+}
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  const el = node as Element;
+  if (el.tagName === "A" &&
+      (el.getAttribute("href") || "").startsWith("/api/docs/")) {
+    el.setAttribute("target", "_blank");
+    el.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
 export default function ChatBox() {
   const { events, taskId, error, start } = useTaskStream();
   const [input, setInput] = useState("");
@@ -2877,7 +2894,8 @@ export default function ChatBox() {
     : undefined;   // 不用 .at(-1)：ES2022 API，tsconfig lib<ES2022 时 tsc -b 失败（v17 P3-9）
 
   const html = taskInfo?.result?.report
-    ? DOMPurify.sanitize(marked.parse(taskInfo.result.report) as string)
+    ? DOMPurify.sanitize(
+        marked.parse(linkifyCitations(taskInfo.result.report)) as string)
     : "";
 
   return (
@@ -3755,6 +3773,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v25：M4 知识库轮①——引用 [[doc_id#页码]] 前端可点击（点开原 PDF 页，场景 C 闭环）；首批语料（年报节选×3 官方+方法论 120 条 AI 初稿待审核）；向量检索/ingest 双类型实证。
 - v24：空报告防御（writer 空 content 保留原稿/黑板拼降级报告，机制上杜绝 done+空报告）+ Timeline 可读性增强（参数摘要/✓✗/意见/节点数/原因）。触发：用户线上反馈（东财封禁窗口+critic 压力致空报告）。
 - v23：strategy_spec 工具 Schema 补全（M2 线上：flash 4 次翻译失败→精确 Schema+提示词示例）；东财海外 IP 累计限流留痕（缓存预灌兜底）；部署器 MSYS 路径转换误诊更正。
 - v22：embedding 三层回退链（RAG 向量检索恢复）。SiliconFlow 免费 bge-m3 实测 1024 维匹配 DDL；config 三新字段（key 空则跳层）；llm.embed 按 EMBED_PROVIDER 分发（httpx+Bearer）；probe 链 [zhipu e3→e2→siliconflow]；002_hnsw 启用；.env.example 补占位。验证：宿主+容器探针（vector_ok=true 首次）、向量 drill mode=vector 命中 0.7286、HNSW CREATE INDEX、29 测试绿。C2 工程目的达成（智谱数值待余额补录）；embedding 侧非单厂商（ADR-0005 补注，chat 仍纯 GLM）。

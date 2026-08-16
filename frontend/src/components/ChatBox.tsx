@@ -6,6 +6,22 @@ import { useTaskStream } from "../lib/useTaskStream";
 import Timeline from "./Timeline";
 import EquityChart from "./EquityChart";
 
+// v25（M4）：报告中的 [[doc_id#页码]] 引用转为可点击链接，新标签页打开
+// 服务端渲染的原 PDF 页图片（GET /api/docs/{doc_id}/page/{page}）。
+const CITE_RE = /\[\[(doc_[A-Za-z0-9]+)#(\d+)\]\]/g;
+function linkifyCitations(md: string): string {
+  return md.replace(CITE_RE, (_m, doc: string, page: string) =>
+    `[📄原文第${page}页](/api/docs/${doc}/page/${page})`);
+}
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  const el = node as Element;
+  if (el.tagName === "A" &&
+      (el.getAttribute("href") || "").startsWith("/api/docs/")) {
+    el.setAttribute("target", "_blank");
+    el.setAttribute("rel", "noopener noreferrer");
+  }
+});
+
 export default function ChatBox() {
   const { events, taskId, error, start } = useTaskStream();
   const [input, setInput] = useState("");
@@ -30,7 +46,8 @@ export default function ChatBox() {
     : undefined;   // 不用 .at(-1)：ES2022 API，tsconfig lib<ES2022 时 tsc -b 失败（v17 P3-9）
 
   const html = taskInfo?.result?.report
-    ? DOMPurify.sanitize(marked.parse(taskInfo.result.report) as string)
+    ? DOMPurify.sanitize(
+        marked.parse(linkifyCitations(taskInfo.result.report)) as string)
     : "";
 
   return (
