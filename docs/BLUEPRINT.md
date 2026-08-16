@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v29 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v30 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v30（2026-08-16）：**评测器容错（M5 轮③）**。全量评测第二次中断的根因：模型产出非法 spec（op:"le"）→ 任务内被工具正确拒绝（真实失败结果）→ 评测器复算 `StrategySpec.model_validate(spec)` 无 try/except → 进程崩溃；且服务器看门狗脚本 grep 自身 cmdline 匹配 "run_eval" → 恒判"在跑"从未重启（自匹配 bug，两 bug 叠加成死锁）。修复：复算块整体 try/except（非法 spec → backtest_ok=False，属实的用例失败）；看门狗 /proc 扫描跳过自身 pid。
 > - v29（2026-08-16）：**run_eval 断点续跑（M5 轮②）**。全量评测在生产容器内两次于 ~2.5h 处被静默终止（容器无重启/无 OOM/无 traceback——判定为 exec 通道生命周期的环境行为，非应用缺陷）；改造：`--checkpoint <jsonl>` 逐用例追加结果+flush，启动时载入并跳过已存用例，逐用例打印 `[n/total] id -> status` 进度；环境侧以 `sh -c 'cd ... && exec python -u ... >> log 2>&1'` 启动（日志落盘，进程直系）。评测中断损失从"全部重来"降为"补跑缺集"。
 > - v28（2026-08-16）：**M5 评测轮①：评测集候选 45 条 + must_cite 断言**。`run_eval.py` 新增 RAG 用例断言 `must_cite:[doc_id...]`（报告须含 [[doc#页]] 引用命中指定文档）+ 结果表第 8 列 cite。评测集候选（`evals/cases/{backtest,report,rag,refuse}.yaml`，**AI 生成待用户删改定稿** per 评测说明）：回测 12（双均线三组/EMA/RSI/动量/突破两组/量价组合/跨窗口/拒绝 3）/ 报告 8（走势/波动/月度/风险/区间极值/知识混合/复合任务）/ RAG 20（方法论 12 + 茅台 2025/2024、五粮液 2025 财务 8，全部 must_cite）/ 正确拒绝 5（套利/高频/杠杆/机器学习/加密货币）。运行口径：run_eval 走 task_repo.create（不占日预算预留，v16 已声明）；容器内 detached 执行规避 SSH 会话时长限制。M4 收口同轮：方法论 120 条经用户审核**全部通过**（生产库 title 标注），M4-验收报告结论通过。
 > - v27（2026-08-16）：**Supervisor 拒绝边界澄清（M4 轮③）**。v26 复验时 flash 将"查茅台营收+回测方法论"的知识问答任务**误判为超出策略白名单而 refuse**（task_refused）——拒绝话术只描述策略白名单，且 flash 非确定性下同题首跑未拒。supervisor 规则 5：白名单只约束"回测策略族"，仅当用户要求回测/交易策略且类型超白名单才 refuse；行情分析、公司财务/年报数据、知识库与方法论问答等研究类需求正常规划 research/writer。
@@ -3163,22 +3164,28 @@ async def run_case(case: dict, timeout_min: int) -> dict:
     # ^ 按用例声明读取 fill/tolerance——原硬编码使 yaml 声明失效（v17 P2-1③）
     fixture = case.get("fixture", {}).get("price")
     if fixture and spec and metrics:
-        df = pd.read_parquet(fixture)
-        if "date" in df.columns:
-            df = df.set_index("date")
-        local = vector_backtest(
-            df["close_hfq"],
-            compile_signal(StrategySpec.model_validate(spec), df),
-            fill=recompute.get("fill", "next_close"))
-        backtest_ok = all(
-            abs(local[k] - metrics.get(k, float("nan"))) < tol
-            for k in ("total_return", "max_drawdown"))
-        report = _find_report(t)
-        if report:
-            needle = set()
-            for k in ("total_return", "annual_return", "max_drawdown"):
-                needle |= _fmt_variants(metrics.get(k, 0.0))
-            numbers_ok = any(s in report for s in needle)
+        # v30（M5 实测发现）：模型产出的 spec 可能非法（如 op:"le"）——任务内被
+        # 工具正确拒绝属真实失败结果，评测器复算必须容错而非崩溃（曾致全量
+        # 评测进程中断且被看门狗循环复现）
+        try:
+            df = pd.read_parquet(fixture)
+            if "date" in df.columns:
+                df = df.set_index("date")
+            local = vector_backtest(
+                df["close_hfq"],
+                compile_signal(StrategySpec.model_validate(spec), df),
+                fill=recompute.get("fill", "next_close"))
+            backtest_ok = all(
+                abs(local[k] - metrics.get(k, float("nan"))) < tol
+                for k in ("total_return", "max_drawdown"))
+            report = _find_report(t)
+            if report:
+                needle = set()
+                for k in ("total_return", "annual_return", "max_drawdown"):
+                    needle |= _fmt_variants(metrics.get(k, 0.0))
+                numbers_ok = any(s in report for s in needle)
+        except Exception:
+            backtest_ok = False
     refusal_ok = (any(e["type"] == "task_refused" for e in trace)
                   if case.get("assert", {}).get("must_refuse")
                   else None)
@@ -3806,6 +3813,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v30：评测器复算容错（非法 spec→backtest_ok=False 而非进程崩溃）+ 看门狗自匹配修复——两 bug 叠加曾致评测死锁。
 - v29：run_eval 断点续跑（--checkpoint jsonl + 进度输出）——评测进程两次 ~2.5h 被环境静默终止后的根治性缓解。
 - v28：M5 评测轮①——must_cite 断言+结果表 cite 列；评测候选 45 条（回测12/报告8/RAG20/拒绝5，待用户定稿）；M4 收口（方法论 120 条审核通过）。
 - v27：Supervisor 拒绝边界澄清——白名单只约束回测策略族，研究/知识问答类不得误拒（flash 曾把财务问答判超白名单）。

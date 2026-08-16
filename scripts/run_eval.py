@@ -96,22 +96,28 @@ async def run_case(case: dict, timeout_min: int) -> dict:
     # ^ 按用例声明读取 fill/tolerance——原硬编码使 yaml 声明失效（v17 P2-1③）
     fixture = case.get("fixture", {}).get("price")
     if fixture and spec and metrics:
-        df = pd.read_parquet(fixture)
-        if "date" in df.columns:
-            df = df.set_index("date")
-        local = vector_backtest(
-            df["close_hfq"],
-            compile_signal(StrategySpec.model_validate(spec), df),
-            fill=recompute.get("fill", "next_close"))
-        backtest_ok = all(
-            abs(local[k] - metrics.get(k, float("nan"))) < tol
-            for k in ("total_return", "max_drawdown"))
-        report = _find_report(t)
-        if report:
-            needle = set()
-            for k in ("total_return", "annual_return", "max_drawdown"):
-                needle |= _fmt_variants(metrics.get(k, 0.0))
-            numbers_ok = any(s in report for s in needle)
+        # v30（M5 实测发现）：模型产出的 spec 可能非法（如 op:"le"）——任务内被
+        # 工具正确拒绝属真实失败结果，评测器复算必须容错而非崩溃（曾致全量
+        # 评测进程中断且被看门狗循环复现）
+        try:
+            df = pd.read_parquet(fixture)
+            if "date" in df.columns:
+                df = df.set_index("date")
+            local = vector_backtest(
+                df["close_hfq"],
+                compile_signal(StrategySpec.model_validate(spec), df),
+                fill=recompute.get("fill", "next_close"))
+            backtest_ok = all(
+                abs(local[k] - metrics.get(k, float("nan"))) < tol
+                for k in ("total_return", "max_drawdown"))
+            report = _find_report(t)
+            if report:
+                needle = set()
+                for k in ("total_return", "annual_return", "max_drawdown"):
+                    needle |= _fmt_variants(metrics.get(k, 0.0))
+                numbers_ok = any(s in report for s in needle)
+        except Exception:
+            backtest_ok = False
     refusal_ok = (any(e["type"] == "task_refused" for e in trace)
                   if case.get("assert", {}).get("must_refuse")
                   else None)
