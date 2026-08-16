@@ -167,7 +167,10 @@ async def doc_page(doc_id: str, page: int):
                 return None
             pix = doc[page - 1].get_pixmap(dpi=110)
         os.makedirs(os.path.dirname(cache), exist_ok=True)
-        tmp = cache + ".tmp"
+        # v26（M4 实测发现）：PyMuPDF 的 Pixmap.save 按扩展名推断格式——
+        # v17 的 ".tmp" 后缀直接 ValueError（doc_page 从未真正工作过，
+        # 单测不覆盖渲染路径）。tmp 文件必须以 .png 结尾，原子性不变。
+        tmp = cache + ".tmp.png"
         pix.save(tmp)
         os.replace(tmp, cache)   # 原子替换：并发渲染同页时读端不会拿到半张PNG（v17 P3-5）
         with open(cache, "rb") as f:
