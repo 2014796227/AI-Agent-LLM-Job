@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v35 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v36 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v36（2026-08-17）：**数据溯源前端可视化（用户需求：面试官可核查"真抓取非编造"）**。①`fetch_combined` 三路设置 `df.attrs["source"]`（eastmoney/tencent/cache）；②`_price_history` 工件 meta 落 source；③`artifact_created` 事件携带溯源摘要（trace_meta：source/symbol/start/end/rows/fixture）；④ChatBox 渲染「数据溯源」条——来源（东财/腾讯 AKShare 实时拉取或 24h 缓存）+行数+区间+核查指引（行情 App 对照同日 K 线；年报引用点开原 PDF 页）；⑤页脚来源声明细化（东财/腾讯行情·巨潮年报）。缓存路径 attrs 标记为 cache（缓存 JSON 不保源，24h 内必为上述源之一）。
 > - v35（2026-08-17）：**失败可解释性（用户反馈驱动）**。用户连续两次遭遇 task_failed（429-1302 账户速率/1305 模型过载——免费层在请求密集后的滑动窗口余温），但前端只有时间线一行"任务失败"，用户无从知道原因与对策。**修复**：①ChatBox 失败面板——failed/interrupted 时展示黄底提示框（错误分类映射 + 应对建议：限流→等 2~3 分钟重试；余额→充值；中断→重试；数据源→换标的/稍后），附错误详情原文；degraded 时展示降级横幅（部分结果+标注口径）；②llm.chat 429 族限流感知长退避（1302/1305 窗口为分钟级，2s/4s/8s 不够——改 5s/15s/30s；其他错误退避不变）。数据层两次故障中均正常（工件已生成），失败全在 LLM 侧。
 > - v34（2026-08-17）：**ETF 提示词歧义修正（v33 复验发现）**。513100 复验任务中 research **根本未调用行情工具**即答"不支持"——根因：「恒生科技指数ETF」名称含"指数"，被 v33 规则 6（"指数不支持"）误伤；实际该标的有 6 位代码、属已支持的场内 ETF。修正：research/supervisor 标的判断**只看代码**（51/56/58/15/16/18 开头=场内 ETF，名称含"指数"的 ETF 亦支持，附 513100/510300 例）；不支持的是无 6 位基金代码的指数本身与港股/美股/场外基金。
 > - v33（2026-08-17）：**场内 ETF 支持与数据层友好报错（用户实测 513100 触发）**。用户提问恒生科技 ETF（513100）暴露两层缺口：①`_tx_symbol` 交易所前缀只按个股段设计——5 开头基金被误判深市（`sz513100` 查无数据）；②东财**个股**接口本就不覆盖场内基金代码段（IndexError 裸传给模型→报告只能含糊说"工具返回 IndexError"）。**修复**：①前缀规则补 ETF 代码段（沪 51/56/58、深 15/16/18，与个股段无冲突；实测 513100→sh、159915→sz）；②fetch_combined 分流——ETF 径直走腾讯源（hfq/raw 实测齐备，5:1 复权比恰证 hfq 必要；东财 fund_etf_hist_em 备选留 P2），个股维持东财→腾讯回退；③双源失败改抛**明确 ValueError**（含代码/已试源/支持范围文案），替代裸 IndexError；④research/supervisor 提示词声明标的范围：6 位 A 股个股与场内 ETF 支持，指数/港股/美股/场外基金明确不支持（拒绝并说明，不反复重试）。过程纪律：本轮起蓝图同步必过 15 项结构断言+diff 行数体检（v32 误删事故的固化教训）。
@@ -810,9 +811,15 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                                artifact_id=result.get("artifact_id"),
                                kind=result.get("kind"))
                 if result.get("artifact_id"):
+                    # v36：行情工件事件携带溯源摘要（前端"数据溯源"条渲染依据）
+                    meta = result.get("meta") or {}
                     await on_event(type="artifact_created",
                                    artifact_id=result["artifact_id"],
-                                   kind=result.get("kind"))
+                                   kind=result.get("kind"),
+                                   trace_meta={k: meta[k] for k in
+                                               ("source", "symbol", "start",
+                                                "end", "rows", "fixture")
+                                               if k in meta})
             except BudgetExceeded:
                 raise
             except Exception as e:
@@ -1429,6 +1436,7 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
     if key in _cache:
         df = pd.read_json(_cache.get(key), orient="split").set_index("date")
         df.index = df.index.astype(str)   # read_json 可能解析为 datetime——与新鲜路径 str 索引保持一致
+        df.attrs["source"] = "cache"      # v36：溯源标识（缓存值 24h 内由下述源拉取）
         return df
     # v33：东财个股接口不覆盖场内基金代码段（对 ETF 直接 IndexError）——
     # ETF 径走腾讯源（hfq/raw 双口径实测可用；东财 fund_etf_hist_em 备选留 P2）
@@ -1445,6 +1453,7 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
             df = _std(hfq, "hfq").merge(_std(raw, "raw"),
                                         on="date", how="inner")
             assert len(df) == len(hfq), "hfq/raw 日期未对齐"
+            df.attrs["source"] = "eastmoney"   # v36：溯源标识
             em_ok = True
         except Exception:
             em_ok = False
@@ -1466,6 +1475,7 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
         df = _std_tx(hfq, "hfq").merge(_std_tx(raw, "raw"),
                                        on="date", how="inner")
         assert len(df) == len(hfq), "hfq/raw 日期未对齐(腾讯源)"
+        df.attrs["source"] = "tencent"    # v36：溯源标识
     df = df.set_index("date")
     _cache.set(key, df.reset_index().to_json(orient="split"), expire=86400)
     return df
@@ -1892,6 +1902,7 @@ async def _price_history(args: dict, ctx: dict) -> dict:
         df, "price_history",
         meta={"symbol": symbol, "start": start, "end": end,
               "adjust": "hfq计算+raw展示",
+              "source": df.attrs.get("source", "unknown"),   # v36：溯源
               "fixture": bool(ctx.get("fixture"))})
     s = await artifacts.summary(art)
     return {**s, "note": "完整数据以artifact_id在服务端流转；展示价格为不复权raw口径"}
@@ -3029,6 +3040,36 @@ export default function ChatBox() {
         出错了：{error}
       </div>}
       <Timeline events={events} />
+      {(() => {
+        const SOURCE_LABEL: Record<string, string> = {
+          eastmoney: "东方财富（AKShare 实时拉取）",
+          tencent: "腾讯财经（AKShare 实时拉取）",
+          cache: "24h 内缓存（原始源：东方财富/腾讯财经）",
+        };
+        const srcs = events
+          .filter(e => e.type === "artifact_created"
+            && e.payload?.trace_meta?.source)
+          .map(e => e.payload.trace_meta);
+        if (!srcs.length) return null;
+        return (
+          <div style={{ margin: "12px 0", padding: 10, border: "1px solid #ddd",
+                       borderRadius: 6, fontSize: 12, color: "#444",
+                       background: "#fafafa" }}>
+            <strong>数据溯源</strong>（真实接口抓取，可独立核查）
+            {srcs.map((m: any, i: number) => (
+              <div key={i} style={{ marginTop: 4 }}>
+                · {m.symbol}：{SOURCE_LABEL[m.source] || m.source} ·
+                {m.rows} 行 · 区间 {m.start}~{m.end}
+                {m.fixture ? " · 评测冻结快照" : ""}
+              </div>
+            ))}
+            <div style={{ color: "#999", marginTop: 6 }}>
+              核查方式：任意行情 App（东方财富/同花顺/腾讯自选股）对照同日 K 线；
+              年报数字点报告中的引用直接打开原 PDF 页。
+            </div>
+          </div>
+        );
+      })()}
       {taskInfo && ["failed", "interrupted"].includes(taskInfo.status) && (
         <div style={{ margin: "12px 0", padding: 12, border: "1px solid #e3a008",
                      background: "#fff8e6", borderRadius: 6, fontSize: 13 }}>
@@ -3050,8 +3091,8 @@ export default function ChatBox() {
       {btArt && <EquityChart artifactId={btArt} />}
       {html && <div dangerouslySetInnerHTML={{ __html: html }} />}
       <footer style={{ marginTop: 32, fontSize: 12, color: "#888" }}>
-        研究演示用途，非投资建议 · 数据来自公开免费源(AKShare) ·
-        回测为向量化近似
+        研究演示用途，非投资建议 · 行情：东方财富/腾讯财经(AKShare 公开接口) ·
+        知识库：巨潮资讯网官方年报 PDF（引用可点开原页） · 回测为向量化近似
       </footer>
     </div>
   );
@@ -3939,6 +3980,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v36：数据溯源前端可视化——attrs→meta→事件 trace_meta→「数据溯源」条（来源/行数/区间/核查指引）+页脚声明。
 - v35：失败可解释性——前端失败原因面板（错误分类+应对建议+详情）与降级横幅；chat 对 429 族限流长退避（5s/15s/30s）。
 - v34：ETF 提示词歧义——名称含「指数」的场内 ETF 被「指数不支持」规则误伤（未调工具即答不支持）；标的判断改为只看代码段并举例。
 - v33：场内 ETF 支持（前缀段 51/56/58·15/16/18 + ETF 径走腾讯源）+ 双源失败明确 ValueError + 提示词标的范围声明——用户 513100 实测触发。

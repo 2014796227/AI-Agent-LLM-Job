@@ -62,6 +62,7 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
     if key in _cache:
         df = pd.read_json(_cache.get(key), orient="split").set_index("date")
         df.index = df.index.astype(str)   # read_json 可能解析为 datetime——与新鲜路径 str 索引保持一致
+        df.attrs["source"] = "cache"      # v36：溯源标识（缓存值 24h 内由下述源拉取）
         return df
     # v33：东财个股接口不覆盖场内基金代码段（对 ETF 直接 IndexError）——
     # ETF 径走腾讯源（hfq/raw 双口径实测可用；东财 fund_etf_hist_em 备选留 P2）
@@ -78,6 +79,7 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
             df = _std(hfq, "hfq").merge(_std(raw, "raw"),
                                         on="date", how="inner")
             assert len(df) == len(hfq), "hfq/raw 日期未对齐"
+            df.attrs["source"] = "eastmoney"   # v36：溯源标识
             em_ok = True
         except Exception:
             em_ok = False
@@ -99,6 +101,7 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
         df = _std_tx(hfq, "hfq").merge(_std_tx(raw, "raw"),
                                        on="date", how="inner")
         assert len(df) == len(hfq), "hfq/raw 日期未对齐(腾讯源)"
+        df.attrs["source"] = "tencent"    # v36：溯源标识
     df = df.set_index("date")
     _cache.set(key, df.reset_index().to_json(orient="split"), expire=86400)
     return df

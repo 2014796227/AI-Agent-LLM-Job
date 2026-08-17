@@ -82,6 +82,36 @@ export default function ChatBox() {
         出错了：{error}
       </div>}
       <Timeline events={events} />
+      {(() => {
+        const SOURCE_LABEL: Record<string, string> = {
+          eastmoney: "东方财富（AKShare 实时拉取）",
+          tencent: "腾讯财经（AKShare 实时拉取）",
+          cache: "24h 内缓存（原始源：东方财富/腾讯财经）",
+        };
+        const srcs = events
+          .filter(e => e.type === "artifact_created"
+            && e.payload?.trace_meta?.source)
+          .map(e => e.payload.trace_meta);
+        if (!srcs.length) return null;
+        return (
+          <div style={{ margin: "12px 0", padding: 10, border: "1px solid #ddd",
+                       borderRadius: 6, fontSize: 12, color: "#444",
+                       background: "#fafafa" }}>
+            <strong>数据溯源</strong>（真实接口抓取，可独立核查）
+            {srcs.map((m: any, i: number) => (
+              <div key={i} style={{ marginTop: 4 }}>
+                · {m.symbol}：{SOURCE_LABEL[m.source] || m.source} ·
+                {m.rows} 行 · 区间 {m.start}~{m.end}
+                {m.fixture ? " · 评测冻结快照" : ""}
+              </div>
+            ))}
+            <div style={{ color: "#999", marginTop: 6 }}>
+              核查方式：任意行情 App（东方财富/同花顺/腾讯自选股）对照同日 K 线；
+              年报数字点报告中的引用直接打开原 PDF 页。
+            </div>
+          </div>
+        );
+      })()}
       {taskInfo && ["failed", "interrupted"].includes(taskInfo.status) && (
         <div style={{ margin: "12px 0", padding: 12, border: "1px solid #e3a008",
                      background: "#fff8e6", borderRadius: 6, fontSize: 13 }}>
@@ -103,8 +133,8 @@ export default function ChatBox() {
       {btArt && <EquityChart artifactId={btArt} />}
       {html && <div dangerouslySetInnerHTML={{ __html: html }} />}
       <footer style={{ marginTop: 32, fontSize: 12, color: "#888" }}>
-        研究演示用途，非投资建议 · 数据来自公开免费源(AKShare) ·
-        回测为向量化近似
+        研究演示用途，非投资建议 · 行情：东方财富/腾讯财经(AKShare 公开接口) ·
+        知识库：巨潮资讯网官方年报 PDF（引用可点开原页） · 回测为向量化近似
       </footer>
     </div>
   );

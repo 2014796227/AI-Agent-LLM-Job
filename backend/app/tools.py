@@ -100,6 +100,7 @@ async def _price_history(args: dict, ctx: dict) -> dict:
         df, "price_history",
         meta={"symbol": symbol, "start": start, "end": end,
               "adjust": "hfq计算+raw展示",
+              "source": df.attrs.get("source", "unknown"),   # v36：溯源
               "fixture": bool(ctx.get("fixture"))})
     s = await artifacts.summary(art)
     return {**s, "note": "完整数据以artifact_id在服务端流转；展示价格为不复权raw口径"}

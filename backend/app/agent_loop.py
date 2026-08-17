@@ -72,9 +72,15 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                                artifact_id=result.get("artifact_id"),
                                kind=result.get("kind"))
                 if result.get("artifact_id"):
+                    # v36：行情工件事件携带溯源摘要（前端"数据溯源"条渲染依据）
+                    meta = result.get("meta") or {}
                     await on_event(type="artifact_created",
                                    artifact_id=result["artifact_id"],
-                                   kind=result.get("kind"))
+                                   kind=result.get("kind"),
+                                   trace_meta={k: meta[k] for k in
+                                               ("source", "symbol", "start",
+                                                "end", "rows", "fixture")
+                                               if k in meta})
             except BudgetExceeded:
                 raise
             except Exception as e:
