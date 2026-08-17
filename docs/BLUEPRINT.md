@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v34 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v35 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v35（2026-08-17）：**失败可解释性（用户反馈驱动）**。用户连续两次遭遇 task_failed（429-1302 账户速率/1305 模型过载——免费层在请求密集后的滑动窗口余温），但前端只有时间线一行"任务失败"，用户无从知道原因与对策。**修复**：①ChatBox 失败面板——failed/interrupted 时展示黄底提示框（错误分类映射 + 应对建议：限流→等 2~3 分钟重试；余额→充值；中断→重试；数据源→换标的/稍后），附错误详情原文；degraded 时展示降级横幅（部分结果+标注口径）；②llm.chat 429 族限流感知长退避（1302/1305 窗口为分钟级，2s/4s/8s 不够——改 5s/15s/30s；其他错误退避不变）。数据层两次故障中均正常（工件已生成），失败全在 LLM 侧。
 > - v34（2026-08-17）：**ETF 提示词歧义修正（v33 复验发现）**。513100 复验任务中 research **根本未调用行情工具**即答"不支持"——根因：「恒生科技指数ETF」名称含"指数"，被 v33 规则 6（"指数不支持"）误伤；实际该标的有 6 位代码、属已支持的场内 ETF。修正：research/supervisor 标的判断**只看代码**（51/56/58/15/16/18 开头=场内 ETF，名称含"指数"的 ETF 亦支持，附 513100/510300 例）；不支持的是无 6 位基金代码的指数本身与港股/美股/场外基金。
 > - v33（2026-08-17）：**场内 ETF 支持与数据层友好报错（用户实测 513100 触发）**。用户提问恒生科技 ETF（513100）暴露两层缺口：①`_tx_symbol` 交易所前缀只按个股段设计——5 开头基金被误判深市（`sz513100` 查无数据）；②东财**个股**接口本就不覆盖场内基金代码段（IndexError 裸传给模型→报告只能含糊说"工具返回 IndexError"）。**修复**：①前缀规则补 ETF 代码段（沪 51/56/58、深 15/16/18，与个股段无冲突；实测 513100→sh、159915→sz）；②fetch_combined 分流——ETF 径直走腾讯源（hfq/raw 实测齐备，5:1 复权比恰证 hfq 必要；东财 fund_etf_hist_em 备选留 P2），个股维持东财→腾讯回退；③双源失败改抛**明确 ValueError**（含代码/已试源/支持范围文案），替代裸 IndexError；④research/supervisor 提示词声明标的范围：6 位 A 股个股与场内 ETF 支持，指数/港股/美股/场外基金明确不支持（拒绝并说明，不反复重试）。过程纪律：本轮起蓝图同步必过 15 项结构断言+diff 行数体检（v32 误删事故的固化教训）。
 > - v32（2026-08-17）：**行情双源回退 + 相对日期自然月对齐（求职演示反馈驱动）**。用户线上提问「近三年」暴露两个叠加问题：①日期锚点解析为**滚动日界窗口**（2023-08-17~2026-08-17），每日漂移击穿预灌缓存；②东财对服务器/家宽双 IP 的累计限流冷却远超预期（>24h/17h 仍封）→ 实时拉取不可用。**修复**：①`fetch_combined` 双源——东财失败自动回退腾讯源（`ak.stock_zh_a_hist_tx`，hfq/raw 双口径；成交量单位校准：TX=股、EM=手，恰 100 倍，÷100 对齐；价格同日交叉校验一致）；②date_line 对齐规则——相对区间忽略进行中当月、端点对齐月初/月末（「近三年」=2023-08-01至2026-07-31），区间按月稳定、语义不变。预灌缓存（EM 数据）继续有效，新窗口经腾讯源实时可取。**过程留痕**：本轮蓝图机械同步曾因锚点误中 agent_loop 段相似 v20 注释致 Part 3 大段误删——提交统计异常（-469 行）即刻发现，从上一提交恢复并以精确锚重做；教训固化：蓝图同步后必须 grep 关键定义做结构断言（本条目下方脚本已含 9 项断言）。
@@ -348,7 +349,16 @@ class LLMClient:
                 except Exception as e:
                     last_err = e
                     if attempt < 3:
-                        await asyncio.sleep(2 ** (attempt + 1))
+                        # v35：429 族（1302 账户速率/1305 模型过载）的限流窗口为
+                        # 分钟级——用更长退避给滑动窗口恢复时间（5s/15s/30s）；
+                        # 其他错误维持 v21 的 2s/4s/8s（预算语义不变）
+                        s = str(e)
+                        rate_limited = ("429" in s or "1302" in s
+                                        or "1305" in s or "速率" in s
+                                        or "访问量" in s)
+                        await asyncio.sleep(
+                            (5, 15, 30)[attempt] if rate_limited
+                            else 2 ** (attempt + 1))
         raise RuntimeError(f"LLM 全部重试失败: {last_err}")
 
     def _embed_sync(self, texts, model, dim):
@@ -2959,6 +2969,23 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
+// v35（用户反馈驱动）：失败/降级在前端明示原因与应对建议——不再只有时间线上
+// 一行"任务失败"。映射按错误文本特征匹配，未命中给通用建议。
+const FAIL_HINT: Array<[RegExp, string]> = [
+  [/1305|访问量过大|1302|速率限制|429/,
+   "模型服务端限流（免费层在请求密集或高峰时段常见）——等待 2~3 分钟后重新提问即可；数据与系统本身无故障。"],
+  [/1113|余额不足/,
+   "模型 API 余额/资源包不足——需要为账户充值或更换 key。"],
+  [/lease_expired|process_restart|interrupted/,
+   "任务执行被中断（服务重启或执行超时）——重新提问即可。"],
+  [/IndexError|行情|Connection/i,
+   "行情数据源暂时不可用——可稍后重试，或换一个标的（6 位 A 股个股/场内 ETF）。"],
+];
+function failHint(err: string): string {
+  for (const [re, hint] of FAIL_HINT) if (re.test(err)) return hint;
+  return "偶发性失败——重新提问通常即可解决；若持续失败请把下方错误详情反馈给维护者。";
+}
+
 export default function ChatBox() {
   const { events, taskId, error, start } = useTaskStream();
   const [input, setInput] = useState("");
@@ -3002,6 +3029,24 @@ export default function ChatBox() {
         出错了：{error}
       </div>}
       <Timeline events={events} />
+      {taskInfo && ["failed", "interrupted"].includes(taskInfo.status) && (
+        <div style={{ margin: "12px 0", padding: 12, border: "1px solid #e3a008",
+                     background: "#fff8e6", borderRadius: 6, fontSize: 13 }}>
+          <strong>任务{taskInfo.status === "failed" ? "失败" : "中断"}：</strong>
+          {failHint(taskInfo.error || "")}
+          <div style={{ color: "#888", marginTop: 6, fontSize: 12,
+                        wordBreak: "break-all" }}>
+            错误详情：{taskInfo.error || "（无）"}
+          </div>
+        </div>
+      )}
+      {taskInfo?.status === "degraded" && (
+        <div style={{ margin: "12px 0", padding: 10, border: "1px solid #e3a008",
+                     background: "#fffdf0", borderRadius: 6, fontSize: 12,
+                     color: "#7a5c00" }}>
+          任务降级：触发预算/时限保护，以下为带标注的部分结果（完整数据已按引用保留）。
+        </div>
+      )}
       {btArt && <EquityChart artifactId={btArt} />}
       {html && <div dangerouslySetInnerHTML={{ __html: html }} />}
       <footer style={{ marginTop: 32, fontSize: 12, color: "#888" }}>
@@ -3894,6 +3939,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v35：失败可解释性——前端失败原因面板（错误分类+应对建议+详情）与降级横幅；chat 对 429 族限流长退避（5s/15s/30s）。
 - v34：ETF 提示词歧义——名称含「指数」的场内 ETF 被「指数不支持」规则误伤（未调工具即答不支持）；标的判断改为只看代码段并举例。
 - v33：场内 ETF 支持（前缀段 51/56/58·15/16/18 + ETF 径走腾讯源）+ 双源失败明确 ValueError + 提示词标的范围声明——用户 513100 实测触发。
 - v32：行情双源（东财限流→腾讯源回退，成交量÷100 对齐）+ 相对日期自然月对齐（滚动日界窗口每日击穿缓存）——用户「近三年」提问驱动；同步事故（锚点误删）当场恢复并立结构断言规矩。

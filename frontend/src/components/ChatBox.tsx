@@ -22,6 +22,23 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   }
 });
 
+// v35（用户反馈驱动）：失败/降级在前端明示原因与应对建议——不再只有时间线上
+// 一行"任务失败"。映射按错误文本特征匹配，未命中给通用建议。
+const FAIL_HINT: Array<[RegExp, string]> = [
+  [/1305|访问量过大|1302|速率限制|429/,
+   "模型服务端限流（免费层在请求密集或高峰时段常见）——等待 2~3 分钟后重新提问即可；数据与系统本身无故障。"],
+  [/1113|余额不足/,
+   "模型 API 余额/资源包不足——需要为账户充值或更换 key。"],
+  [/lease_expired|process_restart|interrupted/,
+   "任务执行被中断（服务重启或执行超时）——重新提问即可。"],
+  [/IndexError|行情|Connection/i,
+   "行情数据源暂时不可用——可稍后重试，或换一个标的（6 位 A 股个股/场内 ETF）。"],
+];
+function failHint(err: string): string {
+  for (const [re, hint] of FAIL_HINT) if (re.test(err)) return hint;
+  return "偶发性失败——重新提问通常即可解决；若持续失败请把下方错误详情反馈给维护者。";
+}
+
 export default function ChatBox() {
   const { events, taskId, error, start } = useTaskStream();
   const [input, setInput] = useState("");
@@ -65,6 +82,24 @@ export default function ChatBox() {
         出错了：{error}
       </div>}
       <Timeline events={events} />
+      {taskInfo && ["failed", "interrupted"].includes(taskInfo.status) && (
+        <div style={{ margin: "12px 0", padding: 12, border: "1px solid #e3a008",
+                     background: "#fff8e6", borderRadius: 6, fontSize: 13 }}>
+          <strong>任务{taskInfo.status === "failed" ? "失败" : "中断"}：</strong>
+          {failHint(taskInfo.error || "")}
+          <div style={{ color: "#888", marginTop: 6, fontSize: 12,
+                        wordBreak: "break-all" }}>
+            错误详情：{taskInfo.error || "（无）"}
+          </div>
+        </div>
+      )}
+      {taskInfo?.status === "degraded" && (
+        <div style={{ margin: "12px 0", padding: 10, border: "1px solid #e3a008",
+                     background: "#fffdf0", borderRadius: 6, fontSize: 12,
+                     color: "#7a5c00" }}>
+          任务降级：触发预算/时限保护，以下为带标注的部分结果（完整数据已按引用保留）。
+        </div>
+      )}
       {btArt && <EquityChart artifactId={btArt} />}
       {html && <div dangerouslySetInnerHTML={{ __html: html }} />}
       <footer style={{ marginTop: 32, fontSize: 12, color: "#888" }}>

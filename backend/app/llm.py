@@ -70,7 +70,16 @@ class LLMClient:
                 except Exception as e:
                     last_err = e
                     if attempt < 3:
-                        await asyncio.sleep(2 ** (attempt + 1))
+                        # v35：429 族（1302 账户速率/1305 模型过载）的限流窗口为
+                        # 分钟级——用更长退避给滑动窗口恢复时间（5s/15s/30s）；
+                        # 其他错误维持 v21 的 2s/4s/8s（预算语义不变）
+                        s = str(e)
+                        rate_limited = ("429" in s or "1302" in s
+                                        or "1305" in s or "速率" in s
+                                        or "访问量" in s)
+                        await asyncio.sleep(
+                            (5, 15, 30)[attempt] if rate_limited
+                            else 2 ** (attempt + 1))
         raise RuntimeError(f"LLM 全部重试失败: {last_err}")
 
     def _embed_sync(self, texts, model, dim):
