@@ -37,8 +37,8 @@ def _std_tx(df, suffix):
         f"low_{suffix}": df["low"].astype(float),
         f"close_{suffix}": df["close"].astype(float),
         # 腾讯源成交量为股、东财为手——÷100 对齐口径
-        # （实测 2026-05-29 茅台：EM 76478 手 vs TX 7647800 股，恰 100 倍；
-        两次 cross 校验价格完全一致）
+        # （实测 2026-05-29 茅台：EM 76478 手 vs TX 7647800 股，恰 100 倍，
+        # 两次同日交叉校验价格完全一致）
         f"volume_{suffix}": df["volume"].astype(float) / 100.0})
 
 def _tx_symbol(symbol: str) -> str:
