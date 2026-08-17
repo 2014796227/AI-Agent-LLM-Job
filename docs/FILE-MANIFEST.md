@@ -67,6 +67,7 @@
 | `tests/test_rag_chunk.py` | Part 9 | 不跨页/页归属/扫描页拒绝 |
 | `tests/__init__.py` | 新增（空，包结构需要） | — |
 | `tests/conftest.py` | Part 9（v18 钉死内容） | 仅 sys.path 注入，无 fixture |
+| `tests/test_compose_result.py` | Part 9（v37 新增） | _compose_result 降级三级兜底契约 |
 | `requirements.txt` | Part 6 | 版本锁定 |
 | `Dockerfile` | Part 6 | python:3.11-slim |
 | `.env.example` | Part 6 | 三变量；不含真实密钥 |

@@ -227,7 +227,23 @@ async def _run(task_id: str, eval_ctx: dict, reserved: int):
             hb.cancel()
 
 def _compose_result(context: dict) -> dict:
-    return {"report": context.get("_report", ""),
+    # v37（用户实测降级任务无报告发现）：BudgetExceeded 可能在 _report 赋值前
+    # 抛出（如 critic 修订阶段熔断）——降级路径必须同样保证产出可读部分结果：
+    # 优先 _report → 末节点草稿 → 各节点黑板拼装（明示降级，事实仍出自节点输出）
+    report = context.get("_report", "")
+    if not report.strip():
+        outputs = [v.get("output", "") for k, v in context.items()
+                   if not k.startswith("_")]
+        # 取末个非空节点输出（拓扑末端的 writer/strategy 产出最完整）
+        last = next((o for o in reversed(outputs) if o and o.strip()), "")
+        if last:
+            report = ("（预算/时限保护，撰写未完成——以下为末节点产出，本任务降级）\n\n"
+                      + last)
+        else:
+            report = ("（任务在撰写完成前触发预算/时限保护，以下为各节点结论摘要——本任务降级）\n\n"
+                      + _digest({k: v for k, v in context.items()
+                                 if not k.startswith("_")}))
+    return {"report": report,
             "nodes": {k: v.get("output", "")[:300]
                       for k, v in context.items() if not k.startswith("_")}}
 

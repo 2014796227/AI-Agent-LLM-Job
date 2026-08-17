@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v36 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v37 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v37（2026-08-17）：**降级路径报告兜底（用户实测降级任务无报告发现）**。用户任务在 critic 修订阶段触发预算熔断后仅见 v35 降级横幅、无报告——BudgetExceeded 从 `_execute` 抛出时**早于 `context["_report"]=draft` 赋值**，`_compose_result` 取到空串：v24 的空报告防御位于正常流程末尾，未覆盖降级逃生路径（姊妹漏洞）。修复：兜底下沉进 `_compose_result` 三级——`_report` → **末**节点非空产出（拓扑末端 writer/strategy 最完整，前缀「预算/时限保护，撰写未完成」明示降级）→ 各节点黑板摘要；新增 3 条单测固化（含「取末而非取首」的次序契约——首版实现取首个非空，被测试当场纠正）。
 > - v36（2026-08-17）：**数据溯源前端可视化（用户需求：面试官可核查"真抓取非编造"）**。①`fetch_combined` 三路设置 `df.attrs["source"]`（eastmoney/tencent/cache）；②`_price_history` 工件 meta 落 source；③`artifact_created` 事件携带溯源摘要（trace_meta：source/symbol/start/end/rows/fixture）；④ChatBox 渲染「数据溯源」条——来源（东财/腾讯 AKShare 实时拉取或 24h 缓存）+行数+区间+核查指引（行情 App 对照同日 K 线；年报引用点开原 PDF 页）；⑤页脚来源声明细化（东财/腾讯行情·巨潮年报）。缓存路径 attrs 标记为 cache（缓存 JSON 不保源，24h 内必为上述源之一）。
 > - v35（2026-08-17）：**失败可解释性（用户反馈驱动）**。用户连续两次遭遇 task_failed（429-1302 账户速率/1305 模型过载——免费层在请求密集后的滑动窗口余温），但前端只有时间线一行"任务失败"，用户无从知道原因与对策。**修复**：①ChatBox 失败面板——failed/interrupted 时展示黄底提示框（错误分类映射 + 应对建议：限流→等 2~3 分钟重试；余额→充值；中断→重试；数据源→换标的/稍后），附错误详情原文；degraded 时展示降级横幅（部分结果+标注口径）；②llm.chat 429 族限流感知长退避（1302/1305 窗口为分钟级，2s/4s/8s 不够——改 5s/15s/30s；其他错误退避不变）。数据层两次故障中均正常（工件已生成），失败全在 LLM 侧。
 > - v34（2026-08-17）：**ETF 提示词歧义修正（v33 复验发现）**。513100 复验任务中 research **根本未调用行情工具**即答"不支持"——根因：「恒生科技指数ETF」名称含"指数"，被 v33 规则 6（"指数不支持"）误伤；实际该标的有 6 位代码、属已支持的场内 ETF。修正：research/supervisor 标的判断**只看代码**（51/56/58/15/16/18 开头=场内 ETF，名称含"指数"的 ETF 亦支持，附 513100/510300 例）；不支持的是无 6 位基金代码的指数本身与港股/美股/场外基金。
@@ -1216,9 +1217,22 @@ async def _run(task_id: str, eval_ctx: dict, reserved: int):
             hb.cancel()
 
 def _compose_result(context: dict) -> dict:
-    return {"report": context.get("_report", ""),
-            "nodes": {k: v.get("output", "")[:300]
-                      for k, v in context.items() if not k.startswith("_")}}
+    # v37（用户实测降级任务无报告发现）：BudgetExceeded 可能在 _report 赋值前
+    # 抛出（如 critic 修订阶段熔断）——降级路径必须同样保证产出可读部分结果：
+    # 优先 _report → 末节点草稿 → 各节点黑板拼装（明示降级，事实仍出自节点输出）
+    report = context.get("_report", "")
+    if not report.strip():
+        outputs = [v.get("output", "") for k, v in context.items()
+                   if not k.startswith("_")]
+        # 取末个非空节点输出（拓扑末端的 writer/strategy 产出最完整）
+        last = next((o for o in reversed(outputs) if o and o.strip()), "")
+        if last:
+            report = ("（预算/时限保护，撰写未完成——以下为末节点产出，本任务降级）\n\n"
+                      + last)
+        else:
+            report = ("（任务在撰写完成前触发预算/时限保护，以下为各节点结论摘要——本任务降级）\n\n"
+                      + _digest({k: v for k, v in context.items()
+                                 if not k.startswith("_")})
 
 async def _heartbeat(task_id: str):
     try:
@@ -3910,6 +3924,34 @@ async def test_keepalive_yielded_when_running():
     assert len(ka) >= 2                # 心跳持续产生、流未被终止
 ```
 
+### `backend/tests/test_compose_result.py`（v37 新增）
+```python
+"""v37：_compose_result 降级兜底——任何路径（含 _report 赋值前熔断）都产出
+可读部分结果（用户实测：critic 修订阶段预算熔断致降级任务空报告）。"""
+from app.orchestrator import _compose_result
+
+def test_compose_result_prefers_report():
+    ctx = {"_report": "正式报告内容", "_plan": {},
+           "n1": {"agent": "writer", "output": "草稿"}}
+    r = _compose_result(ctx)
+    assert r["report"] == "正式报告内容"
+    assert r["nodes"] == {"n1": "草稿"}
+
+def test_compose_result_degraded_uses_last_node_output():
+    # _report 未赋值（熔断在撰写前）→ 取**末**节点产出（最完整）并带降级说明
+    ctx = {"_plan": {},
+           "n1": {"agent": "research", "output": "结论A"},
+           "n2": {"agent": "writer", "output": "writer 草稿片段"}}
+    r = _compose_result(ctx)["report"]
+    assert "writer 草稿片段" in r and "降级" in r and "结论A" not in r
+
+def test_compose_result_degraded_digest_fallback():
+    # 无任何非空节点输出 → 黑板摘要 + 明示降级（而非空报告）
+    ctx = {"_plan": {}, "n1": {"agent": "research", "output": ""}}
+    r = _compose_result(ctx)
+    assert "降级" in r["report"]
+```
+
 ### `backend/tests/test_rag_chunk.py`
 ```python
 import fitz
@@ -3980,6 +4022,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v37：降级路径报告兜底——熔断可早于 _report 赋值（v24 姊妹漏洞）；_compose_result 三级兜底（_report→末节点产出→黑板摘要）+3 单测。
 - v36：数据溯源前端可视化——attrs→meta→事件 trace_meta→「数据溯源」条（来源/行数/区间/核查指引）+页脚声明。
 - v35：失败可解释性——前端失败原因面板（错误分类+应对建议+详情）与降级横幅；chat 对 429 族限流长退避（5s/15s/30s）。
 - v34：ETF 提示词歧义——名称含「指数」的场内 ETF 被「指数不支持」规则误伤（未调工具即答不支持）；标的判断改为只看代码段并举例。
