@@ -182,6 +182,7 @@ async def _run_all(cases_dir: str, timeout_min: int, checkpoint: str = ""):
         r = await run_case(case, timeout_min)
         out.append(r)
         n += 1
+        done.add(case["id"])   # v31：运行时同步跳过集（否则同轮后段同名用例重复跑）
         if checkpoint:   # v29：逐用例 checkpoint——评测进程被环境杀掉后可断点续跑
             with open(checkpoint, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
