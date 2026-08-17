@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v32 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v33 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v33（2026-08-17）：**场内 ETF 支持与数据层友好报错（用户实测 513100 触发）**。用户提问恒生科技 ETF（513100）暴露两层缺口：①`_tx_symbol` 交易所前缀只按个股段设计——5 开头基金被误判深市（`sz513100` 查无数据）；②东财**个股**接口本就不覆盖场内基金代码段（IndexError 裸传给模型→报告只能含糊说"工具返回 IndexError"）。**修复**：①前缀规则补 ETF 代码段（沪 51/56/58、深 15/16/18，与个股段无冲突；实测 513100→sh、159915→sz）；②fetch_combined 分流——ETF 径直走腾讯源（hfq/raw 实测齐备，5:1 复权比恰证 hfq 必要；东财 fund_etf_hist_em 备选留 P2），个股维持东财→腾讯回退；③双源失败改抛**明确 ValueError**（含代码/已试源/支持范围文案），替代裸 IndexError；④research/supervisor 提示词声明标的范围：6 位 A 股个股与场内 ETF 支持，指数/港股/美股/场外基金明确不支持（拒绝并说明，不反复重试）。过程纪律：本轮起蓝图同步必过 15 项结构断言+diff 行数体检（v32 误删事故的固化教训）。
 > - v32（2026-08-17）：**行情双源回退 + 相对日期自然月对齐（求职演示反馈驱动）**。用户线上提问「近三年」暴露两个叠加问题：①日期锚点解析为**滚动日界窗口**（2023-08-17~2026-08-17），每日漂移击穿预灌缓存；②东财对服务器/家宽双 IP 的累计限流冷却远超预期（>24h/17h 仍封）→ 实时拉取不可用。**修复**：①`fetch_combined` 双源——东财失败自动回退腾讯源（`ak.stock_zh_a_hist_tx`，hfq/raw 双口径；成交量单位校准：TX=股、EM=手，恰 100 倍，÷100 对齐；价格同日交叉校验一致）；②date_line 对齐规则——相对区间忽略进行中当月、端点对齐月初/月末（「近三年」=2023-08-01至2026-07-31），区间按月稳定、语义不变。预灌缓存（EM 数据）继续有效，新窗口经腾讯源实时可取。**过程留痕**：本轮蓝图机械同步曾因锚点误中 agent_loop 段相似 v20 注释致 Part 3 大段误删——提交统计异常（-469 行）即刻发现，从上一提交恢复并以精确锚重做；教训固化：蓝图同步后必须 grep 关键定义做结构断言（本条目下方脚本已含 9 项断言）。
 > - v31（2026-08-17）：**评测轮④：全量报告落袋 + 跳过集同步**。全量第一轮报告已归档 `docs/eval/results.md`（46 用例：cite 15/17、backtest 复算 8/8、numbers 6/6 全真；failed×4 为 flash 晚间过载、running×2 为轮询超时记录、refusal 5/8——Supervisor 边界非确定性实测留痕）。修复：checkpoint 跳过集只在启动时载入、运行期不更新——首轮同轮后段的同名用例（smoke 集）重复执行产生 4 行重复记录；`done.add` 运行时同步。环境侧：补跑 failed/running 用例前删除 results_full.md（看门狗以报告存在为完成信号）。
 > - v30（2026-08-16）：**评测器容错（M5 轮③）**。全量评测第二次中断的根因：模型产出非法 spec（op:"le"）→ 任务内被工具正确拒绝（真实失败结果）→ 评测器复算 `StrategySpec.model_validate(spec)` 无 try/except → 进程崩溃；且服务器看门狗脚本 grep 自身 cmdline 匹配 "run_eval" → 恒判"在跑"从未重启（自匹配 bug，两 bug 叠加成死锁）。修复：复算块整体 try/except（非法 spec → backtest_ok=False，属实的用例失败）；看门狗 /proc 扫描跳过自身 pid。
@@ -651,11 +652,16 @@ system_prompt: |
   5. 白名单只约束"回测策略族"：仅当用户要求回测/交易策略且策略类型超出白名单时才
      refuse；行情走势分析、公司财务/年报数据、知识库与方法论问答等研究类需求不涉及
      回测，正常规划 research/writer 节点，不得 refuse（v27：实测 flash 曾把财务问答
-     误判为超白名单而拒绝）。
+     误判为超白名单而拒绝）。标的范围（v33）：6 位 A 股个股与场内 ETF 支持；
+     指数/港股/美股/场外基金属数据不支持范围——refuse 并在 reason 说明标的不支持。
 ```
 
 ### `backend/agents/research.yaml`
 ```yaml
+name: research
+model: glm-4.7-flash
+max_steps: 6
+tools: [market.price_history, artifact.summary, rag.search]
 system_prompt: |
   你是投研数据分析师。规则：
   1. 事实必须来自工具返回；每条结论标注来源（artifact_id 或 [[doc_id#页码]] 引用），禁止编造数字。
@@ -665,6 +671,8 @@ system_prompt: |
   5. 工具选择（v26）：财务数据（营收/利润/资产负债等）与投研方法论类问题用 rag.search
      检索知识库（内置公司年报节选与量化方法论库，引用格式 [[doc_id#页码]]）；
      仅价格走势/行情类用 market.price_history。"根据知识库回答"类问题禁止调用行情工具。
+  6. 标的范围（v33）：行情工具支持 6 位 A 股个股与场内 ETF 代码；指数/港股/美股/
+     场外基金数据不支持——如实告知不支持，不得反复重试或编造数据。
 ```
 
 ### `backend/agents/strategy.yaml`
@@ -1380,11 +1388,17 @@ def _std_tx(df, suffix):
         f"low_{suffix}": df["low"].astype(float),
         f"close_{suffix}": df["close"].astype(float),
         # 腾讯源成交量为股、东财为手——÷100 对齐口径
-        # （实测 2026-05-29 茅台：EM 76478 手 vs TX 7647800 股，恰 100 倍；
-        两次 cross 校验价格完全一致）
+        # （实测 2026-05-29 茅台：EM 76478 手 vs TX 7647800 股，恰 100 倍，
+        # 两次同日交叉校验价格完全一致）
         f"volume_{suffix}": df["volume"].astype(float) / 100.0})
 
 def _tx_symbol(symbol: str) -> str:
+    # v33：场内 ETF 代码段——沪 51/56/58、深 15/16/18（A 股个股无 5/1 开头段，
+    # 无冲突；513100 类基金此前被误判深市致查无数据）
+    if symbol.startswith(("51", "56", "58")):
+        return "sh" + symbol
+    if symbol.startswith(("15", "16", "18")):
+        return "sz" + symbol
     if symbol.startswith(("6", "9")):
         return "sh" + symbol
     if symbol.startswith(("4", "8")):
@@ -1400,22 +1414,39 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
         df = pd.read_json(_cache.get(key), orient="split").set_index("date")
         df.index = df.index.astype(str)   # read_json 可能解析为 datetime——与新鲜路径 str 索引保持一致
         return df
-    try:
-        hfq = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
-                     end_date=end, adjust="hfq")
-        raw = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
-                     end_date=end, adjust="")
-        _validate(hfq)
-        _validate(raw)
-        df = _std(hfq, "hfq").merge(_std(raw, "raw"), on="date", how="inner")
-        assert len(df) == len(hfq), "hfq/raw 日期未对齐"
-    except Exception:
+    # v33：东财个股接口不覆盖场内基金代码段（对 ETF 直接 IndexError）——
+    # ETF 径走腾讯源（hfq/raw 双口径实测可用；东财 fund_etf_hist_em 备选留 P2）
+    is_etf = symbol[:2] in ("51", "56", "58", "15", "16", "18")
+    em_ok = False
+    if not is_etf:
+        try:
+            hfq = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
+                         end_date=end, adjust="hfq")
+            raw = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
+                         end_date=end, adjust="")
+            _validate(hfq)
+            _validate(raw)
+            df = _std(hfq, "hfq").merge(_std(raw, "raw"),
+                                        on="date", how="inner")
+            assert len(df) == len(hfq), "hfq/raw 日期未对齐"
+            em_ok = True
+        except Exception:
+            em_ok = False
+    if not em_ok:
         txs = _tx_symbol(symbol)
-        hfq = _retry(ak.stock_zh_a_hist_tx, symbol=txs, start_date=start,
-                     end_date=end, adjust="hfq")
-        raw = _retry(ak.stock_zh_a_hist_tx, symbol=txs, start_date=start,
-                     end_date=end, adjust="")
-        assert len(hfq) > 0 and len(raw) > 0, "东财与腾讯双源均无数据"
+        try:
+            hfq = _retry(ak.stock_zh_a_hist_tx, symbol=txs,
+                         start_date=start, end_date=end, adjust="hfq")
+            raw = _retry(ak.stock_zh_a_hist_tx, symbol=txs,
+                         start_date=start, end_date=end, adjust="")
+        except Exception as e:
+            raise ValueError(
+                f"行情双源获取失败 {symbol}（东财={'不适用ETF' if is_etf else '失败'}，"
+                f"腾讯源 {txs} 异常 {type(e).__name__}）——"
+                f"支持 6 位 A 股个股与场内 ETF 代码") from e
+        assert len(hfq) > 0 and len(raw) > 0, (
+            f"双源均无数据: {symbol}（东财={'不适用ETF' if is_etf else '失败'}，"
+            f"腾讯源 {txs} 空）——请确认是 6 位 A 股个股/场内 ETF 代码")
         df = _std_tx(hfq, "hfq").merge(_std_tx(raw, "raw"),
                                        on="date", how="inner")
         assert len(df) == len(hfq), "hfq/raw 日期未对齐(腾讯源)"
@@ -3857,6 +3888,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v33：场内 ETF 支持（前缀段 51/56/58·15/16/18 + ETF 径走腾讯源）+ 双源失败明确 ValueError + 提示词标的范围声明——用户 513100 实测触发。
 - v32：行情双源（东财限流→腾讯源回退，成交量÷100 对齐）+ 相对日期自然月对齐（滚动日界窗口每日击穿缓存）——用户「近三年」提问驱动；同步事故（锚点误删）当场恢复并立结构断言规矩。
 - v31：全量第一轮报告归档（cite 15/17、复算 8/8、refusal 5/8 实测画像）；checkpoint 跳过集运行时同步（修同轮重复行）。
 - v30：评测器复算容错（非法 spec→backtest_ok=False 而非进程崩溃）+ 看门狗自匹配修复——两 bug 叠加曾致评测死锁。

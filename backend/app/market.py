@@ -42,6 +42,12 @@ def _std_tx(df, suffix):
         f"volume_{suffix}": df["volume"].astype(float) / 100.0})
 
 def _tx_symbol(symbol: str) -> str:
+    # v33：场内 ETF 代码段——沪 51/56/58、深 15/16/18（A 股个股无 5/1 开头段，
+    # 无冲突；513100 类基金此前被误判深市致查无数据）
+    if symbol.startswith(("51", "56", "58")):
+        return "sh" + symbol
+    if symbol.startswith(("15", "16", "18")):
+        return "sz" + symbol
     if symbol.startswith(("6", "9")):
         return "sh" + symbol
     if symbol.startswith(("4", "8")):
@@ -57,22 +63,39 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
         df = pd.read_json(_cache.get(key), orient="split").set_index("date")
         df.index = df.index.astype(str)   # read_json 可能解析为 datetime——与新鲜路径 str 索引保持一致
         return df
-    try:
-        hfq = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
-                     end_date=end, adjust="hfq")
-        raw = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
-                     end_date=end, adjust="")
-        _validate(hfq)
-        _validate(raw)
-        df = _std(hfq, "hfq").merge(_std(raw, "raw"), on="date", how="inner")
-        assert len(df) == len(hfq), "hfq/raw 日期未对齐"
-    except Exception:
+    # v33：东财个股接口不覆盖场内基金代码段（对 ETF 直接 IndexError）——
+    # ETF 径走腾讯源（hfq/raw 双口径实测可用；东财 fund_etf_hist_em 备选留 P2）
+    is_etf = symbol[:2] in ("51", "56", "58", "15", "16", "18")
+    em_ok = False
+    if not is_etf:
+        try:
+            hfq = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
+                         end_date=end, adjust="hfq")
+            raw = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
+                         end_date=end, adjust="")
+            _validate(hfq)
+            _validate(raw)
+            df = _std(hfq, "hfq").merge(_std(raw, "raw"),
+                                        on="date", how="inner")
+            assert len(df) == len(hfq), "hfq/raw 日期未对齐"
+            em_ok = True
+        except Exception:
+            em_ok = False
+    if not em_ok:
         txs = _tx_symbol(symbol)
-        hfq = _retry(ak.stock_zh_a_hist_tx, symbol=txs, start_date=start,
-                     end_date=end, adjust="hfq")
-        raw = _retry(ak.stock_zh_a_hist_tx, symbol=txs, start_date=start,
-                     end_date=end, adjust="")
-        assert len(hfq) > 0 and len(raw) > 0, "东财与腾讯双源均无数据"
+        try:
+            hfq = _retry(ak.stock_zh_a_hist_tx, symbol=txs,
+                         start_date=start, end_date=end, adjust="hfq")
+            raw = _retry(ak.stock_zh_a_hist_tx, symbol=txs,
+                         start_date=start, end_date=end, adjust="")
+        except Exception as e:
+            raise ValueError(
+                f"行情双源获取失败 {symbol}（东财={'不适用ETF' if is_etf else '失败'}，"
+                f"腾讯源 {txs} 异常 {type(e).__name__}）——"
+                f"支持 6 位 A 股个股与场内 ETF 代码") from e
+        assert len(hfq) > 0 and len(raw) > 0, (
+            f"双源均无数据: {symbol}（东财={'不适用ETF' if is_etf else '失败'}，"
+            f"腾讯源 {txs} 空）——请确认是 6 位 A 股个股/场内 ETF 代码")
         df = _std_tx(hfq, "hfq").merge(_std_tx(raw, "raw"),
                                        on="date", how="inner")
         assert len(df) == len(hfq), "hfq/raw 日期未对齐(腾讯源)"
