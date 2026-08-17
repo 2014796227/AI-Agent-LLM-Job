@@ -1,7 +1,7 @@
 # AlphaDesk 蓝图 v32 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
-> - v32（2026-08-17）：**行情双源回退 + 相对日期自然月对齐（求职演示反馈驱动）**。用户线上提问「近三年」暴露两个叠加问题：①日期锚点解析为**滚动日界窗口**（2023-08-17~2026-08-17），每日漂移击穿预灌缓存；②东财对服务器/家宽双 IP 的累计限流冷却远超预期（>24h/17h 仍封）→ 实时拉取不可用。**修复**：①`fetch_combined` 双源——东财失败自动回退腾讯源（`ak.stock_zh_a_hist_tx`，hfq/raw 双口径；成交量单位校准：TX=股、EM=手，恰 100 倍，÷100 对齐；价格两次同日交叉校验一致）；②date_line 对齐规则——相对区间忽略进行中当月、端点对齐月初/月末（「近三年」=2023-08-01至2026-07-31），区间按月稳定、语义不变。预灌缓存（EM 数据）继续有效，新窗口经腾讯源实时可取。
+> - v32（2026-08-17）：**行情双源回退 + 相对日期自然月对齐（求职演示反馈驱动）**。用户线上提问「近三年」暴露两个叠加问题：①日期锚点解析为**滚动日界窗口**（2023-08-17~2026-08-17），每日漂移击穿预灌缓存；②东财对服务器/家宽双 IP 的累计限流冷却远超预期（>24h/17h 仍封）→ 实时拉取不可用。**修复**：①`fetch_combined` 双源——东财失败自动回退腾讯源（`ak.stock_zh_a_hist_tx`，hfq/raw 双口径；成交量单位校准：TX=股、EM=手，恰 100 倍，÷100 对齐；价格同日交叉校验一致）；②date_line 对齐规则——相对区间忽略进行中当月、端点对齐月初/月末（「近三年」=2023-08-01至2026-07-31），区间按月稳定、语义不变。预灌缓存（EM 数据）继续有效，新窗口经腾讯源实时可取。**过程留痕**：本轮蓝图机械同步曾因锚点误中 agent_loop 段相似 v20 注释致 Part 3 大段误删——提交统计异常（-469 行）即刻发现，从上一提交恢复并以精确锚重做；教训固化：蓝图同步后必须 grep 关键定义做结构断言（本条目下方脚本已含 9 项断言）。
 > - v31（2026-08-17）：**评测轮④：全量报告落袋 + 跳过集同步**。全量第一轮报告已归档 `docs/eval/results.md`（46 用例：cite 15/17、backtest 复算 8/8、numbers 6/6 全真；failed×4 为 flash 晚间过载、running×2 为轮询超时记录、refusal 5/8——Supervisor 边界非确定性实测留痕）。修复：checkpoint 跳过集只在启动时载入、运行期不更新——首轮同轮后段的同名用例（smoke 集）重复执行产生 4 行重复记录；`done.add` 运行时同步。环境侧：补跑 failed/running 用例前删除 results_full.md（看门狗以报告存在为完成信号）。
 > - v30（2026-08-16）：**评测器容错（M5 轮③）**。全量评测第二次中断的根因：模型产出非法 spec（op:"le"）→ 任务内被工具正确拒绝（真实失败结果）→ 评测器复算 `StrategySpec.model_validate(spec)` 无 try/except → 进程崩溃；且服务器看门狗脚本 grep 自身 cmdline 匹配 "run_eval" → 恒判"在跑"从未重启（自匹配 bug，两 bug 叠加成死锁）。修复：复算块整体 try/except（非法 spec → backtest_ok=False，属实的用例失败）；看门狗 /proc 扫描跳过自身 pid。
 > - v29（2026-08-16）：**run_eval 断点续跑（M5 轮②）**。全量评测在生产容器内两次于 ~2.5h 处被静默终止（容器无重启/无 OOM/无 traceback——判定为 exec 通道生命周期的环境行为，非应用缺陷）；改造：`--checkpoint <jsonl>` 逐用例追加结果+flush，启动时载入并跳过已存用例，逐用例打印 `[n/total] id -> status` 进度；环境侧以 `sh -c 'cd ... && exec python -u ... >> log 2>&1'` 启动（日志落盘，进程直系）。评测中断损失从"全部重来"降为"补跑缺集"。
@@ -746,6 +746,464 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                     on_event=_noop_event) -> tuple[str, int]:
     """返回 (最终文本, 累计tokens)。工具子集=spec.tools；步数=spec.max_steps。
     BudgetExceeded 向上传播由编排器降级；步数熔断返回明确文案+最后模型文本。"""
+    # v20（M0 端到端实测发现）：tools.py 提供模块级 schemas()/execute() 与
+    # REGISTRY 字典——v18 起此处误写 `from app.tools import registry`（不存在的
+    # 对象），首个真实 Agent 节点即 ImportError（单测不覆盖 run_agent 故未现形）
+    from app.tools import schemas as tool_schemas, execute as tool_execute
+    messages = [{"role": "system", "content": spec.system_prompt},
+                {"role": "user",
+                 "content": f"任务背景（上游结论摘要）：\n{context_digest}\n\n你的任务：\n{instruction}"}]
+    schemas = tool_schemas(spec.tools)
+    total_tokens = 0
+    last_text = ""
+    for step in range(spec.max_steps):
+        budget.check_llm()
+        r: ChatResult = await llm().chat(messages, tools=schemas, model=spec.model)
+        budget.spend_llm(r.usage_tokens)
+        total_tokens += r.usage_tokens
+        await on_event(type="llm_response", agent=spec.name, step=step)
+        if not r.tool_calls:
+            return r.text, total_tokens
+        last_text = r.text or last_text
+        messages.append({"role": "assistant", "content": r.text,
+                         "tool_calls": [{"id": tc.id, "type": "function",
+                                         "function": {"name": tc.name,
+                                                      "arguments": tc.arguments}}
+                                        for tc in r.tool_calls]})
+        for tc in r.tool_calls:
+            budget.check_tool()
+            budget.spend_tool()
+            try:
+                args = parse_json_lenient(tc.arguments)
+                await on_event(type="tool_call", agent=spec.name, tool=tc.name,
+                               args=json.dumps(args, ensure_ascii=False,
+                                               default=str)[:2000])
+                t0 = time.monotonic()
+                result = await tool_execute(tc.name, args, ctx=ctx or {})
+                ms = int((time.monotonic() - t0) * 1000)
+                await on_event(type="tool_result", agent=spec.name, tool=tc.name,
+                               ok=True, ms=ms,
+                               artifact_id=result.get("artifact_id"),
+                               kind=result.get("kind"))
+                if result.get("artifact_id"):
+                    await on_event(type="artifact_created",
+                                   artifact_id=result["artifact_id"],
+                                   kind=result.get("kind"))
+            except BudgetExceeded:
+                raise
+            except Exception as e:
+                result = {"error": f"{type(e).__name__}: {e}"}
+                await on_event(type="tool_result", agent=spec.name, tool=tc.name,
+                               ok=False, ms=0)
+            messages.append({"role": "tool", "tool_call_id": tc.id,
+                             "content": _safe_truncate(result)})
+    return (f"已达最大步数熔断（{spec.max_steps}步）。"
+            f"最后模型输出片段：{last_text[:300] or '（无）'}"), total_tokens
+```
+
+### `backend/app/tasks.py`
+```python
+import uuid, socket, os, json
+import asyncpg
+from app.config import settings
+from app.db import pool
+from app.metrics import M_TASK
+
+WORKER_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:4]}"
+LEASE_S = 60
+WATCHDOG_GRACE_S = 90
+
+async def create(input_text: str, reserved: int = 0) -> asyncpg.Record:
+    """reserved 在建行即落值（而非 claim 时）——启动对账按 Σ(pending.reserved)
+    重建当日预留的依据；/api/chat 在 create 之前已完成 usage_day 预占。"""
+    p = await pool()
+    tid, trace = uuid.uuid4(), uuid.uuid4().hex[:12]
+    async with p.acquire() as c:
+        async with c.transaction():
+            await c.execute(
+                "INSERT INTO usage_day(day, tasks) VALUES(current_date, 1) "
+                "ON CONFLICT(day) DO UPDATE SET tasks = usage_day.tasks + 1")
+            return await c.fetchrow(
+                "INSERT INTO tasks(id, trace_id, status, input, reserved) "
+                "VALUES($1,$2,'pending',$3,$4) RETURNING *",
+                tid, trace, input_text, reserved)
+
+async def get(task_id: str) -> asyncpg.Record | None:
+    p = await pool()
+    return await p.fetchrow("SELECT * FROM tasks WHERE id=$1", task_id)
+
+async def claim(task_id: str, reserved: int = 0) -> bool:
+    """CAS 抢占；登记本任务预留额（watchdog 中断时据此释放）。"""
+    p = await pool()
+    async with p.acquire() as c:
+        row = await c.fetchrow(
+            "UPDATE tasks SET status='running', worker_id=$2, reserved=$3, "
+            "heartbeat_at=now(), "
+            f"lease_expires_at=now()+interval '{LEASE_S} seconds' "
+            "WHERE id=$1 AND status='pending' RETURNING id",
+            task_id, WORKER_ID, reserved)
+        return row is not None
+
+async def renew(task_id: str):
+    p = await pool()
+    async with p.acquire() as c:
+        await c.execute(
+            f"UPDATE tasks SET heartbeat_at=now(), lease_expires_at=now()+interval '{LEASE_S} seconds', "
+            "updated_at=now() WHERE id=$1 AND status='running' AND worker_id=$2",
+            task_id, WORKER_ID)
+
+async def finish(task_id: str, status: str, result, error, plan, context) -> bool:
+    """guarded finish：仅当任务仍为 running 且 worker 是本人时更新。
+    返回 False=状态已被迁移（典型：watchdog→interrupted）——调用方必须跳过
+    终态事件发射与预留释放（迁移方已做），仅记冲突日志与指标。"""
+    p = await pool()
+    async with p.acquire() as c:
+        row = await c.fetchrow(
+            "UPDATE tasks SET status=$2, result=$3, error=$4, plan=$5, context=$6, "
+            "updated_at=now(), lease_expires_at=NULL "
+            "WHERE id=$1 AND status='running' AND worker_id=$7 RETURNING id",
+            task_id, status,
+            json.dumps(result, ensure_ascii=False, default=str) if result else None,
+            error,
+            json.dumps(plan, ensure_ascii=False) if plan else None,
+            json.dumps(context, ensure_ascii=False, default=str),
+            WORKER_ID)
+        return row is not None
+
+async def _release_of(row) -> None:
+    """中断迁移方释放该任务的预留。仅 watchdog_tick 使用——recover_on_boot
+    的预留已由对账 upsert 整列重置覆盖，不得再调用本函数（v18 P1-1）。"""
+    if row["reserved"]:
+        await release_daily(row["reserved"], 0)
+
+async def recover_on_boot() -> tuple[list[str], list[tuple[str, int]]]:
+    """running→interrupted；pending 保留重排队（携带行内 reserved）。
+    当日 reserved 对账=Σ(pending.reserved)（upsert **整列重置**，替代 v15 前的
+    一刀切清零）：恢复任务的预留得以延续、仍受预算闸门约束；极端崩溃场景
+    （对账额+当日 tokens 超预算）允许短暂超占，由后续 release / 下次启动
+    对账自愈。running→interrupted 的预留**不得**再逐个 _release_of——upsert
+    重置后的 reserved 本就不含它们，再释放=二次扣减→闸门被低估放行（v18
+    P1-1）；watchdog 路径仍逐个释放（其无对账，见 _release_of 注释）。
+    已知边界（v18 D-5）：claim/get 阶段 DB 瞬断会使任务滞留 pending（finish
+    的 running 条件不匹配→仅冲突计数），由本函数重启对账自愈——演示级
+    接受，不加运行时重试。"""
+    from app.events import bus
+    p = await pool()
+    async with p.acquire() as c:
+        interrupted = await c.fetch(
+            "UPDATE tasks SET status='interrupted', error='process_restart', "
+            "lease_expires_at=NULL, updated_at=now() "
+            "WHERE status='running' RETURNING id, trace_id, reserved")
+        pending = await c.fetch(
+            "SELECT id, reserved FROM tasks WHERE status='pending' "
+            "ORDER BY created_at")
+        await c.execute(
+            "INSERT INTO usage_day(day, reserved) VALUES(current_date, $1) "
+            "ON CONFLICT(day) DO UPDATE SET reserved = EXCLUDED.reserved",
+            sum(r["reserved"] or 0 for r in pending))
+    for r in interrupted:
+        await bus.emit(str(r["id"]), "task_interrupted",
+                       {"reason": "process_restart", "trace_id": r["trace_id"]})
+        M_TASK.labels("interrupted").inc()
+    return ([str(r["id"]) for r in interrupted],
+            [(str(r["id"]), r["reserved"] or 0) for r in pending])
+
+async def watchdog_tick() -> int:
+    """租约过期且心跳超宽限→interrupted；同步释放其 reserved。"""
+    from app.events import bus
+    p = await pool()
+    rows = await p.fetch(
+        "UPDATE tasks SET status='interrupted', error='lease_expired', "
+        "lease_expires_at=NULL, updated_at=now() "
+        f"WHERE status='running' AND lease_expires_at < now() "
+        f"AND heartbeat_at < now() - interval '{WATCHDOG_GRACE_S} seconds' "
+        "RETURNING id, trace_id, reserved")
+    for r in rows:
+        await bus.emit(str(r["id"]), "task_interrupted",
+                       {"reason": "lease_expired", "trace_id": r["trace_id"]})
+        M_TASK.labels("interrupted").inc()
+        await _release_of(r)
+    return len(rows)
+
+async def reserve_daily(amount: int) -> bool:
+    assert amount <= settings.daily_token_budget, "预留额超过日预算（配置错误）"
+    # 单语句原子性：ON CONFLICT DO UPDATE 的行锁将并发预留串行化，
+    # 后到请求在锁下重读已提交的 reserved 再评估 WHERE——
+    # asyncpg 自动提交模式下语句自身即原子单元，无需应用层事务/重试
+    p = await pool()
+    async with p.acquire() as c:
+        row = await c.fetchrow(
+            "INSERT INTO usage_day(day, reserved) VALUES(current_date, $1) "
+            "ON CONFLICT(day) DO UPDATE SET reserved = usage_day.reserved + $1 "
+            "WHERE usage_day.tokens + usage_day.reserved + $1 <= $2 "
+            "RETURNING reserved", amount, settings.daily_token_budget)
+        return row is not None
+
+async def release_daily(reserved: int, actual_tokens: int, llm_calls: int = 0):
+    """已知边界（v17 D-2/D-3 声明，演示级接受）：
+    ① 跨午夜任务：UPDATE 落在 current_date 新行（可能不存在→no-op）——实际
+      token 丢失不计、昨日 reserved 永久滞留该行（无害）；偏差方向为低估
+      消耗，保守正确。
+    ② 中断任务（watchdog/启动恢复）只释放 reserved、实际消耗不入账——死亡
+      进程消耗不可知；释放权唯一性（不变式7）优先于记账精度。"""
+    p = await pool()
+    async with p.acquire() as c:
+        await c.execute(
+            "UPDATE usage_day SET reserved = GREATEST(reserved - $1, 0), "
+            "tokens = tokens + $2, llm_calls = llm_calls + $3 WHERE day=current_date",
+            reserved, actual_tokens, llm_calls)
+```
+
+### `backend/app/orchestrator.py`
+```python
+import asyncio, datetime as dt, json, re
+from pydantic import BaseModel, Field, model_validator
+from app.agents import AGENTS
+from app.agent_loop import run_agent, parse_json_lenient
+from app.budget import TaskBudget, BudgetExceeded
+from app.config import settings
+from app.events import bus
+from app.llm import llm
+from app.memory import recall_prefix, remember
+from app.metrics import (M_TASK, M_BUDGET, M_EMIT_FAIL, M_TASK_CONF,
+                         M_CRITIC_FAILOPEN)
+from app import tasks as task_repo
+import structlog
+
+log = structlog.get_logger()
+SPEC_AGENTS = {"research", "strategy", "writer"}
+
+class PlanNode(BaseModel):
+    id: str
+    agent: str
+    instruction: str = Field(min_length=4)
+    depends_on: list[str] = []
+
+class Plan(BaseModel):
+    nodes: list[PlanNode] = []
+    final: str = ""
+    refuse: bool = False
+    reason: str = ""
+    supported: str = ""
+    @model_validator(mode="after")
+    def _shape(self):
+        if self.refuse:
+            assert self.reason, "refuse 必须给 reason"
+            assert not self.nodes and not self.final, "拒绝时不得包含计划节点"
+        else:
+            assert self.nodes and self.final, "非拒绝计划必须含 nodes 与 final"
+        return self
+
+def _topo_order(plan: Plan) -> list[PlanNode]:
+    by_id = {n.id: n for n in plan.nodes}
+    indeg = {n.id: 0 for n in plan.nodes}
+    for n in plan.nodes:
+        for d in n.depends_on:
+            indeg[n.id] += 1
+    queue = [i for i, d in indeg.items() if d == 0]
+    order = []
+    while queue:
+        cur = queue.pop()
+        order.append(by_id[cur])
+        for n in plan.nodes:
+            if cur in n.depends_on:
+                indeg[n.id] -= 1
+                if indeg[n.id] == 0:
+                    queue.append(n.id)
+    assert len(order) == len(plan.nodes), "DAG 存在环"
+    return order
+
+def _validate_plan(plan: Plan):
+    ids = [n.id for n in plan.nodes]
+    assert len(ids) == len(set(ids)), "节点 id 重复"
+    assert len(plan.nodes) <= settings.budget_max_dag_nodes, "节点数超上限"
+    by_id = {n.id: n for n in plan.nodes}
+    for n in plan.nodes:
+        assert n.agent in SPEC_AGENTS, f"未知 agent: {n.agent}"
+        for d in n.depends_on:
+            assert d in ids, f"依赖不存在: {d}"
+    assert plan.final in ids and by_id[plan.final].agent == "writer", \
+        "final 节点必须是 writer"
+
+def _digest(context: dict) -> str:
+    lines = [f"[{k} · {v.get('agent','')}] {v.get('output','')[:600]}"
+             for k, v in context.items() if not k.startswith("_")]
+    return "\n".join(lines) or "（无上游结论）"
+
+def _symbols_in(text: str) -> list[str]:
+    """A 股标的代码：按交易所前缀识别（沪主板60/深主板00·含001·002/创业板30/
+    科创板68/北交所43·83·87·92）。v17 收紧——裸六位数字会把"100000股"这类
+    数量词误判为标的（误写 memories+误注入无关记忆）；"600000元"类残余
+    歧义语言层面不可消，接受。"""
+    return sorted(set(re.findall(
+        r"\b(?:60|00|30|68|43|83|87|92)\d{4}\b", text)))
+
+async def _memory_lines(input_text: str) -> str:
+    """命中 memories 的标的注入规划上下文（背景参考；事实以工具返回为准）。"""
+    try:
+        mem = await recall_prefix("symbol:")
+    except Exception:
+        return ""
+    lines = []
+    for s in _symbols_in(input_text):
+        m = mem.get(f"symbol:{s}")
+        if m:
+            lines.append(f"[{s} · 上次分析 {m.get('date', '')}] "
+                         f"{str(m.get('abstract', ''))[:200]}")
+    return "\n".join(lines)
+
+async def _remember_symbols(input_text: str, trace_id: str, context: dict):
+    """done 后按标的落存分析摘要；失败仅告警，不影响任务终态。"""
+    report = (context.get("_report") or "")[:400]
+    if not report:
+        return
+    for s in _symbols_in(input_text):
+        try:
+            await remember(f"symbol:{s}",
+                           {"trace_id": trace_id,
+                            "date": dt.date.today().isoformat(),
+                            "abstract": report})
+        except Exception as e:
+            log.warning("memory_remember_failed", symbol=s, err=str(e))
+
+async def _emit_safe(task_id: str, type_: str, payload: dict | None = None):
+    try:
+        await bus.emit(task_id, type_, payload or {})
+    except Exception as e:
+        M_EMIT_FAIL.inc()
+        log.warning("emit_failed", task_id=task_id, type=type_, err=str(e))
+
+_inflight: set[asyncio.Task] = set()
+
+def submit(task_id: str, eval_ctx: dict | None = None, reserved: int = 0):
+    t = asyncio.create_task(_run(task_id, eval_ctx or {}, reserved))
+    _inflight.add(t)
+    t.add_done_callback(_inflight.discard)
+
+async def _release_reserved(task_id: str, reserved: int, budget: TaskBudget):
+    """归还预留并记账实际消耗——**无条件**执行（reserved=0 的恢复/评测任务
+    其 tokens/llm_calls 也如实入账）；瞬时故障重试 3 次，最终失败仅告警，
+    由下次启动对账兜底。"""
+    for attempt in range(3):
+        try:
+            await task_repo.release_daily(reserved, budget.tokens,
+                                          budget.llm_calls)
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if attempt == 2:
+                log.warning("release_daily_failed", task_id=task_id)
+            else:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+async def _finalize(task_id: str, status: str, result, error, plan, context,
+                    trace_id: str, budget: TaskBudget, reserved: int,
+                    emit_terminal: str = "task_done",
+                    terminal_payload: dict | None = None,
+                    pre_events: list[tuple[str, dict]] | None = None) -> bool:
+    """终态序列：先 guarded finish；成功→(可选前置事件)→终态事件→释放预留；
+    失败(状态已被迁移)→只记冲突，不发事件不释放（迁移方 watchdog 已做）。"""
+    ok = await task_repo.finish(task_id, status, result, error, plan, context)
+    if not ok:
+        M_TASK_CONF.inc()
+        log.warning("finish_conflict", task_id=task_id, want=status)
+        return False
+    M_TASK.labels(status).inc()
+    for type_, payload in (pre_events or []):
+        await _emit_safe(task_id, type_, payload)
+    await _emit_safe(task_id, emit_terminal,
+                     terminal_payload or {"trace_id": trace_id})
+    rel = asyncio.ensure_future(_release_reserved(task_id, reserved, budget))
+    try:
+        await asyncio.shield(rel)   # 外层取消不打断释放；瞬时故障在 helper 内重试
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass                        # 已在 helper 内记 warning
+    return True
+
+async def _run(task_id: str, eval_ctx: dict, reserved: int):
+    budget = TaskBudget()
+    hb: asyncio.Task | None = None
+    try:
+        if not await task_repo.claim(task_id, reserved):
+            if reserved:                      # 抢占失败：释放自己名下预留
+                await task_repo.release_daily(reserved, 0)
+            return
+        task = await task_repo.get(task_id)
+        if task is None:
+            if reserved:
+                await task_repo.release_daily(reserved, 0)
+            return
+        trace_id = task["trace_id"]
+        await _emit_safe(task_id, "task_started",
+                         {"trace_id": trace_id, "input": task["input"]})
+        hb = asyncio.create_task(_heartbeat(task_id))
+        context: dict = {}
+        try:
+            await asyncio.wait_for(
+                _execute(task_id, task["input"], budget, context, eval_ctx),
+                timeout=settings.budget_wall_clock_s + 60)
+            budget.final_check()
+            plan_dump = context.get("_plan") or {}
+            ok = await _finalize(task_id, "done", _compose_result(context), None,
+                                 context.pop("_plan", None), context, trace_id,
+                                 budget, reserved)
+            if ok and not plan_dump.get("refuse"):
+                await _remember_symbols(task["input"], trace_id, context)
+        except BudgetExceeded as e:
+            M_BUDGET.labels(e.reason).inc()
+            result = {**_compose_result(context), "degraded_reason": e.reason}
+            await _finalize(
+                task_id, "degraded", result, f"budget:{e.reason}",
+                context.pop("_plan", None), context, trace_id, budget, reserved,
+                pre_events=[("budget_degraded",
+                             {"reason": e.reason, "trace_id": trace_id})],
+                terminal_payload={"trace_id": trace_id, "degraded": True})
+        except asyncio.TimeoutError:
+            M_BUDGET.labels("wall_clock").inc()
+            result = {**_compose_result(context), "degraded_reason": "wall_clock"}
+            await _finalize(
+                task_id, "degraded", result, "budget:wall_clock",
+                context.pop("_plan", None), context, trace_id, budget, reserved,
+                pre_events=[("budget_degraded",
+                             {"reason": "wall_clock", "trace_id": trace_id})],
+                terminal_payload={"trace_id": trace_id, "degraded": True})
+        except asyncio.CancelledError:
+            # v14：取消路径不释放、不 finish——任务保持 running，
+            # 由 watchdog(租约到期→interrupted+释放)→启动恢复 链兜底；
+            # 这使释放权始终唯一（状态迁移方），机制上杜绝双重释放。
+            raise
+        except Exception as e:
+            await _finalize(task_id, "failed", None,
+                            f"{type(e).__name__}: {e}",
+                            context.pop("_plan", None), context, trace_id,
+                            budget, reserved, emit_terminal="task_failed")
+    finally:
+        if hb:
+            hb.cancel()
+
+def _compose_result(context: dict) -> dict:
+    return {"report": context.get("_report", ""),
+            "nodes": {k: v.get("output", "")[:300]
+                      for k, v in context.items() if not k.startswith("_")}}
+
+async def _heartbeat(task_id: str):
+    try:
+        while True:
+            await asyncio.sleep(10)
+            await task_repo.renew(task_id)
+    except asyncio.CancelledError:
+        pass
+
+async def _execute(task_id: str, input_text: str, budget: TaskBudget,
+                   context: dict, eval_ctx: dict):
+    sup = AGENTS["supervisor"]
+    mem = await _memory_lines(input_text)
+    # v20（M0 端到端实测发现）：模型无当前日期概念——"近三年"被解析为
+    # 2021-2024（训练截止时钟），与真实区间偏移两年。注入日期锚点，
+    # 相对日期一律以它解析（与 Memory 注入同一消息位，事实仍以工具为准）。
     # v20（M0 端到端实测发现）：模型无当前日期概念——"近三年"被解析为
     # 2021-2024（训练截止时钟），与真实区间偏移两年。注入日期锚点，
     # 相对日期一律以它解析（与 Memory 注入同一消息位，事实仍以工具为准）。
@@ -759,8 +1217,7 @@ async def run_agent(spec: AgentSpec, instruction: str, context_digest: str,
                  "\"近半年\"=2026-02-01至2026-07-31）。")
     user_msg = (date_line + "\n" + input_text if not mem else
                 date_line + "\n" + input_text +
-                "\n\n
-（跨任务记忆，仅供背景参考，"
+                "\n\n（跨任务记忆，仅供背景参考，"
                 "事实与数字仍必须以工具返回为准：）\n" + mem)
     budget.check_llm()
     r = await llm().chat([{"role": "system", "content": sup.system_prompt},
@@ -962,17 +1419,6 @@ def fetch_combined(symbol: str, start: str, end: str) -> pd.DataFrame:
         df = _std_tx(hfq, "hfq").merge(_std_tx(raw, "raw"),
                                        on="date", how="inner")
         assert len(df) == len(hfq), "hfq/raw 日期未对齐(腾讯源)"
-    df = df.set_index("date")
-    _cache.set(key, df.reset_index().to_json(orient="split"), expire=86400)
-    return df
-    hfq = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
-                 end_date=end, adjust="hfq")
-    raw = _retry(ak.stock_zh_a_hist, symbol=symbol, start_date=start,
-                 end_date=end, adjust="")
-    _validate(hfq)
-    _validate(raw)
-    df = _std(hfq, "hfq").merge(_std(raw, "raw"), on="date", how="inner")
-    assert len(df) == len(hfq), "hfq/raw 日期未对齐"
     df = df.set_index("date")
     _cache.set(key, df.reset_index().to_json(orient="split"), expire=86400)
     return df
@@ -3411,7 +3857,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
-- v32：行情双源（东财限流→腾讯源回退，成交量÷100 对齐）+ 相对日期自然月对齐（滚动日界窗口每日击穿缓存）——用户「近三年」提问驱动。
+- v32：行情双源（东财限流→腾讯源回退，成交量÷100 对齐）+ 相对日期自然月对齐（滚动日界窗口每日击穿缓存）——用户「近三年」提问驱动；同步事故（锚点误删）当场恢复并立结构断言规矩。
 - v31：全量第一轮报告归档（cite 15/17、复算 8/8、refusal 5/8 实测画像）；checkpoint 跳过集运行时同步（修同轮重复行）。
 - v30：评测器复算容错（非法 spec→backtest_ok=False 而非进程崩溃）+ 看门狗自匹配修复——两 bug 叠加曾致评测死锁。
 - v29：run_eval 断点续跑（--checkpoint jsonl + 进度输出）——评测进程两次 ~2.5h 被环境静默终止后的根治性缓解。
