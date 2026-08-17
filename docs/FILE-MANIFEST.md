@@ -137,6 +137,12 @@
 | `scripts/m0_seed_cache.py` | 线上行情缓存预灌（东财海外 IP 限流兜底，diskcache API 从 fixture 灌入） |
 | `docs/acceptance/M2-验收报告.md` | M2 上线验收留痕 |
 
+**求职轮新增（2026-08-17）**
+
+| 文件 | 用途 |
+|---|---|
+| `docs/resume-pitch.md` | HR 版/技术版/极简版介绍语（依据真实状态撰写）+ 投递提醒 |
+
 **M5/M6 轮新增（2026-08-16~17）**
 
 | 文件 | 用途 |
