@@ -1,6 +1,7 @@
-# AlphaDesk 蓝图 v30 —— 全量工程代码（零缩略完整版）
+# AlphaDesk 蓝图 v31 —— 全量工程代码（零缩略完整版）
 
 > **版本记录**
+> - v31（2026-08-17）：**评测轮④：全量报告落袋 + 跳过集同步**。全量第一轮报告已归档 `docs/eval/results.md`（46 用例：cite 15/17、backtest 复算 8/8、numbers 6/6 全真；failed×4 为 flash 晚间过载、running×2 为轮询超时记录、refusal 5/8——Supervisor 边界非确定性实测留痕）。修复：checkpoint 跳过集只在启动时载入、运行期不更新——首轮同轮后段的同名用例（smoke 集）重复执行产生 4 行重复记录；`done.add` 运行时同步。环境侧：补跑 failed/running 用例前删除 results_full.md（看门狗以报告存在为完成信号）。
 > - v30（2026-08-16）：**评测器容错（M5 轮③）**。全量评测第二次中断的根因：模型产出非法 spec（op:"le"）→ 任务内被工具正确拒绝（真实失败结果）→ 评测器复算 `StrategySpec.model_validate(spec)` 无 try/except → 进程崩溃；且服务器看门狗脚本 grep 自身 cmdline 匹配 "run_eval" → 恒判"在跑"从未重启（自匹配 bug，两 bug 叠加成死锁）。修复：复算块整体 try/except（非法 spec → backtest_ok=False，属实的用例失败）；看门狗 /proc 扫描跳过自身 pid。
 > - v29（2026-08-16）：**run_eval 断点续跑（M5 轮②）**。全量评测在生产容器内两次于 ~2.5h 处被静默终止（容器无重启/无 OOM/无 traceback——判定为 exec 通道生命周期的环境行为，非应用缺陷）；改造：`--checkpoint <jsonl>` 逐用例追加结果+flush，启动时载入并跳过已存用例，逐用例打印 `[n/total] id -> status` 进度；环境侧以 `sh -c 'cd ... && exec python -u ... >> log 2>&1'` 启动（日志落盘，进程直系）。评测中断损失从"全部重来"降为"补跑缺集"。
 > - v28（2026-08-16）：**M5 评测轮①：评测集候选 45 条 + must_cite 断言**。`run_eval.py` 新增 RAG 用例断言 `must_cite:[doc_id...]`（报告须含 [[doc#页]] 引用命中指定文档）+ 结果表第 8 列 cite。评测集候选（`evals/cases/{backtest,report,rag,refuse}.yaml`，**AI 生成待用户删改定稿** per 评测说明）：回测 12（双均线三组/EMA/RSI/动量/突破两组/量价组合/跨窗口/拒绝 3）/ 报告 8（走势/波动/月度/风险/区间极值/知识混合/复合任务）/ RAG 20（方法论 12 + 茅台 2025/2024、五粮液 2025 财务 8，全部 must_cite）/ 正确拒绝 5（套利/高频/杠杆/机器学习/加密货币）。运行口径：run_eval 走 task_repo.create（不占日预算预留，v16 已声明）；容器内 detached 执行规避 SSH 会话时长限制。M4 收口同轮：方法论 120 条经用户审核**全部通过**（生产库 title 标注），M4-验收报告结论通过。
@@ -3250,6 +3251,7 @@ async def _run_all(cases_dir: str, timeout_min: int, checkpoint: str = ""):
         r = await run_case(case, timeout_min)
         out.append(r)
         n += 1
+        done.add(case["id"])   # v31：运行时同步跳过集（否则同轮后段同名用例重复跑）
         if checkpoint:   # v29：逐用例 checkpoint——评测进程被环境杀掉后可断点续跑
             with open(checkpoint, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -3813,6 +3815,7 @@ def test_scanned_page_rejected(tmp_path):
 
 ## 附 A · 版本修复历史索引
 
+- v31：全量第一轮报告归档（cite 15/17、复算 8/8、refusal 5/8 实测画像）；checkpoint 跳过集运行时同步（修同轮重复行）。
 - v30：评测器复算容错（非法 spec→backtest_ok=False 而非进程崩溃）+ 看门狗自匹配修复——两 bug 叠加曾致评测死锁。
 - v29：run_eval 断点续跑（--checkpoint jsonl + 进度输出）——评测进程两次 ~2.5h 被环境静默终止后的根治性缓解。
 - v28：M5 评测轮①——must_cite 断言+结果表 cite 列；评测候选 45 条（回测12/报告8/RAG20/拒绝5，待用户定稿）；M4 收口（方法论 120 条审核通过）。
