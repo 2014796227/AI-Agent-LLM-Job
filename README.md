@@ -22,13 +22,13 @@
 
 ## 当前状态
 
-**已上线**：**http://43.156.248.38**（新加坡腾讯云轻量服务器，M2 验收报告见 `docs/acceptance/M2-验收报告.md`）。完整 Multi-Agent 内核（Supervisor 规划 + research/strategy/writer + critic 回路）已在线上运行——里程碑原设的 "M2 单 Agent → M3 内核" 两步由蓝图一次性交付，实际部署形态即 M3 完成态。免费运行模式：LLM 全走 glm-4.7-flash 免费层（env 覆盖，ADR-002 设计分工不变），向量检索经 SiliconFlow bge-m3（1024 维，HNSW 已启用）；东财行情海外出网实测正常（线上直拉真实数据）。`docs/BLUEPRINT.md` **v22** 为唯一权威来源；M0/M2 全部实测留痕于 `docs/verification/` 与 `docs/acceptance/`；CI（pytest + tsc -b）全绿。**待办**：M4 语料策展（年报节选 5~10 份 + 方法论 100~200 条）、M5 评测与备份演练、uptime 拨测（deploy.md §5）。
+**已上线：http://43.156.248.38**（新加坡腾讯云轻量，单机 Compose 三容器）。**全部里程碑完成（2026-08-17）**：M0 事实核验（29 单测/真实链路端到端，15+ 项实测缺陷修复留痕）→ M1 GitHub+CI（Actions 全绿）→ M2/M3 上线+Multi-Agent 内核（评测复算 10/10 全真）→ M4 知识库（年报节选×3+方法论 120 条经本人审核；引用可点开原页）→ M5 评测与加固（46 用例 0 失败：cite 15/17、备份链演练+每日 cron、限流验证）→ M6 收尾（真实复盘 PM-001、ADR 八篇终审、架构图、演示脚本、面试 Q&A）。免费运行模式（LLM=flash 免费层，embedding=硅基 bge-m3）；架构/边界如实声明见 `docs/architecture.md`。
 
-里程碑：M0 事实核验 ✅ → M1 骨架+CI ✅ → M2 上线 ✅ → M3 内核 ✅（随 M2 交付）→ M4 RAG+Memory → M5 评测与加固 → M6 收尾。M2 前本 README 如实描述为"单 Agent 阶段"。
+里程碑：M0 ✅ → M1 ✅ → M2/M3 ✅ → M4 ✅ → M5 ✅ → M6 ✅。M2 前本 README 如实描述为"单 Agent 阶段"。
 
 ## 技术栈（纯智谱 GLM 单厂商）
 
-GLM-4.6（规划/撰写/审查）+ GLM-4.7-Flash（免费：工具调用/摘要/评测裁判）+ embedding-3（1024 维，启动探针 + embedding-2 回退）· FastAPI(async) · PostgreSQL 16 + pgvector · 自研轻量 Multi-Agent 编排内核 · React+Vite+TS+ECharts · Docker Compose 三容器。
+GLM-4.6（规划/撰写/审查）+ GLM-4.7-Flash（免费：工具调用/摘要/评测裁判）+ embedding 三层回退链（智谱 embedding-3→embedding-2→硅基 bge-m3，均 1024 维探针校验）· FastAPI(async) · PostgreSQL 16 + pgvector · 自研轻量 Multi-Agent 编排内核 · React+Vite+TS+ECharts · Docker Compose 三容器。
 
 ## 快速开始（本地开发）
 

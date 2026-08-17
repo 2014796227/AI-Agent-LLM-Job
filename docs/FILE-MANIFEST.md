@@ -137,6 +137,18 @@
 | `scripts/m0_seed_cache.py` | 线上行情缓存预灌（东财海外 IP 限流兜底，diskcache API 从 fixture 灌入） |
 | `docs/acceptance/M2-验收报告.md` | M2 上线验收留痕 |
 
+**M5/M6 轮新增（2026-08-16~17）**
+
+| 文件 | 用途 |
+|---|---|
+| `docs/acceptance/M5-验收报告.md` | M5 验收留痕（备份链/限流/评测全量） |
+| `docs/acceptance/M6-验收报告.md` | M6 收尾验收留痕 |
+| `docs/eval/results.md` | 全量评测终版报告（100% 脚本生成，2026-08-17T02:52Z） |
+| `docs/postmortem/PM-001-空报告事件.md` | 真实生产事故复盘（Issue #7，证据链五项） |
+| `docs/architecture.md` | 架构说明（Mermaid ×4） |
+| `docs/demo-script.md` | 演示脚本定稿（三条+分镜话术） |
+| `docs/interview-qa.md` | 面试 Q&A（12 主题+速查） |
+
 **M4 知识库轮新增（2026-08-15）**
 
 | 文件 | 用途 |

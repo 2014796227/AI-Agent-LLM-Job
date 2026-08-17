@@ -28,3 +28,6 @@ chunks 表只存 page + seq（v13 起移除 char_start/char_end）：字符偏�
 
 - RAG 语料来源红线：只入官方公开文件（source_type='official'）与你审核的策展内容（'curated'，标注"AI 生成初稿+人工审核"）；付费研报仅可作为用户上传（P2）
 - HNSW 索引在量级 <1 万 chunk 时收益有限，启用主要为生产形态完整
+## 后记（2026-08-17 终审）
+
+HNSW 已启用（维度依据=bge-m3 实测 1024，migrations/002）；M4 语料上线 4 份（年报节选×3 official + 方法论 120 条 curated 经用户审核通过），引用点击→原页渲染闭环（v26 修复 doc_page 后缀缺陷后 200 PNG 实证）；RAG 引用断言 cite 15/17。多厂商 embedding 治理见正文 v22 补注。

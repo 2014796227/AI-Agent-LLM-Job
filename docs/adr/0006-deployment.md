@@ -26,3 +26,6 @@ CREATE TABLE IF NOT EXISTS 只够首建；后续 schema 变更以 `migrations/NN
 ## 决策 5：前端本地构建、只传 dist
 
 小内存服务器 `npm run build` 会 OOM；CI/本地构建产物为纯静态文件，nginx 托管。
+## 后记（2026-08-17 终审）
+
+已上线：腾讯轻量新加坡 2C2G（Ubuntu24.04+Docker29，/opt/alphadesk），升级流程实际执行 5 次（v23/v24/v26/v27/v30，pull→build→up，pip 层缓存后分钟级）。备份顺序推导经生产真跑验证：dump 恢复计数一致 + 卷零悬空对账 7/7；每日 04:00 cron 已配。执行位（Windows 检出丢 +x）与 MSYS 路径转换两环境坑留档 M2/M5 报告。
